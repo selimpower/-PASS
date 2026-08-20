@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>보고PASS — 결재 대기열 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Noto+Sans+KR:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #F8F4EC; font-family: 'Noto Sans KR', -apple-system, sans-serif; }
+  #root { min-height: 100vh; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #d8cfc0; border-radius: 3px; }
+  @keyframes slideIn { from { transform: translateY(-12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  #boot-error {
+    display: none; min-height: 100vh; color: #0A2647; font-family: -apple-system, sans-serif;
+    align-items: center; justify-content: center; flex-direction: column; padding: 24px; text-align: center;
+  }
+  #boot-error.show { display: flex; }
+  #boot-error h1 { font-size: 18px; margin-bottom: 10px; }
+  #boot-error p { font-size: 13px; color: #5C5748; max-width: 420px; line-height: 1.6; }
+  #boot-error code { background: #E2DED4; color: #0A2647; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot-error">
+  <h1>화면을 불러오지 못했어요</h1>
+  <p id="boot-error-msg">필요한 라이브러리를 불러오는 데 실패했습니다. 인터넷 연결을 확인해주세요.</p>
+</div>
+
+<script>
+  function showBootError(msg) {
+    var el = document.getElementById('boot-error');
+    var m = document.getElementById('boot-error-msg');
+    var rootEl = document.getElementById('root');
+    if (rootEl) rootEl.style.display = 'none';
+    if (msg) m.textContent = msg;
+    el.className = 'show';
+  }
+  window.__bogopassLibTimer = setTimeout(function () {
+    if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+      showBootError('필요한 라이브러리(React/ReactDOM)를 8초 안에 불러오지 못했어요. 인터넷 연결 또는 방화벽 설정을 확인해주세요. 그래도 안 되면 이 파일을 Netlify Drop(app.netlify.com/drop)에 올려서 열어보세요.');
+    }
+  }, 8000);
+</script>
+
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"
+  onerror="showBootError('React 라이브러리(cdnjs.cloudflare.com)를 불러오지 못했어요. 사내망/방화벽에서 cdnjs.cloudflare.com 접속이 막혀있는지 확인해주세요.')"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"
+  onerror="showBootError('ReactDOM 라이브러리(cdnjs.cloudflare.com)를 불러오지 못했어요. 사내망/방화벽에서 cdnjs.cloudflare.com 접속이 막혀있는지 확인해주세요.')"></script>
+
+<script>
+(function () {
+  function prefixed(key, shared) {
+    return (shared ? "bogopass_shared_" : "bogopass_local_") + key;
+  }
+  window.storage = {
+    async get(key, shared) {
+      const raw = localStorage.getItem(prefixed(key, shared));
+      if (raw === null) throw new Error("not found");
+      return { key, value: raw, shared: !!shared };
+    },
+    async set(key, value, shared) {
+      try {
+        localStorage.setItem(prefixed(key, shared), value);
+        return { key, value, shared: !!shared };
+      } catch (e) {
+        console.error("storage set failed", e);
+        return null;
+      }
+    },
+    async delete(key, shared) {
+      try {
+        localStorage.removeItem(prefixed(key, shared));
+        return { key, deleted: true, shared: !!shared };
+      } catch (e) {
+        return null;
+      }
+    },
+    async list(prefix, shared) {
+      const p = prefixed(prefix || "", shared);
+      const keys = Object.keys(localStorage).filter((k) => k.startsWith(p));
+      return { keys, prefix, shared: !!shared };
+    },
+  };
+})();
+</script>
+
+<script>
+try {
+const { useState, useEffect, useCallback, useRef } = React;
+const NAVY = "#0A2647";
+const NAVY2 = "#003D82";
+const NAVY_DEEP = "#061A33";
+const CREAM = "#FBFAF7";
+const ORANGE = "#E66A1F";
+const ORANGE_DEEP = "#C4560F";
+const GREEN = "#3E8E5A";
+const RED = "#C4483A";
+const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08"];
+const CALL_TIMEOUT_MS = 5 * 60 * 1e3;
+const APPROVER_ROLES = ["\uB300\uD45C", "\uC804\uBB34", "\uC0C1\uBB34", "\uD300\uC7A5", "\uBD80\uC7A5", "\uACFC\uC7A5"];
+const SEED_VERSION = "2025-08-org-v7";
+const SEED_PEOPLE = [
+  { id: "ph_1", name: "\uAD8C\uBB34\uC815", role: "\uD300\uC7A5", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_2", name: "\uAD8C\uBBFC\uC900", role: "\uBD80\uC7A5", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_3", name: "\uAE40\uB3C4\uD604", role: "\uBD80\uC7A5", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_4", name: "\uBC15\uC778\uCCA0", role: "\uACFC\uC7A5", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_5", name: "\uACFD \uAC74", role: "\uB300\uB9AC", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_6", name: "\uBC15\uC218\uD64D", role: "\uB300\uB9AC", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_7", name: "\uAC15\uC18C\uC601", role: "\uB300\uB9AC", dept: "\uD22C\uC790\uC0AC\uC5C5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_8", name: "\uC720\uD0DC\uC740", role: "\uD300\uC7A5", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_9", name: "\uC870\uC77C\uC601", role: "\uACFC\uC7A5", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_10", name: "\uAD8C\uD0DC\uC740", role: "\uB300\uB9AC", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_11", name: "\uAE40\uCC3D\uD638", role: "\uB300\uB9AC", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_12", name: "\uC774\uC9C0\uC6B0", role: "\uB300\uB9AC", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_13", name: "\uCD5C\uC601\uC6B0", role: "\uB300\uB9AC", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_14", name: "\uC870\uC6A9\uD760", role: "\uC8FC\uC784", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_15", name: "\uC774\uD6A8\uC194", role: "\uC8FC\uC784", dept: "\uAC1C\uBC1C\uC601\uC5C51\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_16", name: "\uB098\uC6A9\uADE0", role: "\uD300\uC7A5", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_17", name: "\uAE40\uC885\uC601", role: "\uBD80\uC7A5", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_18", name: "\uC774\uAC15\uCCA0", role: "\uBD80\uC7A5", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_19", name: "\uAE40\uC601\uADDC", role: "\uACFC\uC7A5", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_20", name: "\uC1A1\uD55C\uC7AC", role: "\uACFC\uC7A5", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_21", name: "\uBC15\uD0DC\uD604", role: "\uB300\uB9AC", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_22", name: "\uC774\uD604\uC2DD", role: "\uB300\uB9AC", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_23", name: "\uAE40\uBBFC\uC131", role: "\uC8FC\uC784", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_24", name: "\uB098\uB3D9\uCCA0", role: "\uC8FC\uC784", dept: "\uB3C4\uC2DC\uC815\uBE44\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_25", name: "\uAE40\uC7AC\uD638", role: "\uC0C1\uBB34", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_26", name: "\uBC15\uC815\uD6C8", role: "\uBD80\uC7A5", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_27", name: "\uBC15\uC131\uC9C4", role: "\uACFC\uC7A5", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_28", name: "\uC2E0\uB3D9\uC9C4", role: "\uACFC\uC7A5", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_29", name: "\uCC9C\uD638\uD604", role: "\uACFC\uC7A5", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_30", name: "\uAE40\uBBFC\uC6B0", role: "\uB300\uB9AC", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_31", name: "\uC774\uC7AC\uD638", role: "\uB300\uB9AC", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_32", name: "\uAE40\uC9C4\uC6D0", role: "\uC8FC\uC784", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_33", name: "\uAE40\uD0DC\uD638", role: "\uC8FC\uC784", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_34", name: "\uC870\uC131\uD6C8", role: "\uC8FC\uC784", dept: "PM\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_35", name: "\uBB38\uD615\uC0BC", role: "\uD300\uC7A5", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_36", name: "\uAE40\uC815\uADE0", role: "\uBD80\uC7A5", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_37", name: "\uC815\uD61C\uC9C4", role: "\uBD80\uC7A5", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_38", name: "\uAD8C\uC21C\uD654", role: "\uB300\uB9AC", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_39", name: "\uBC15\uBC94\uC218", role: "\uB300\uB9AC", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_40", name: "\uC774\uCC44\uC5F0", role: "\uC8FC\uC784", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_41", name: "\uC2EC\uBBFC\uD61C", role: "\uC8FC\uC784", dept: "\uC124\uACC4\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_42", name: "\uC190\uAD6C\uCC3D", role: "\uD300\uC7A5", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_43", name: "\uAC15\uBBF8\uC815", role: "\uBD80\uC7A5", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_44", name: "\uAE40\uC9C0\uC601", role: "\uACFC\uC7A5", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_45", name: "\uAC15\uD76C\uC8FC", role: "\uB300\uB9AC", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_46", name: "\uD55C\uC218\uC5F0", role: "\uB300\uB9AC", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_47", name: "\uD64D\uBBF8\uC120", role: "\uB300\uB9AC", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_48", name: "\uC774\uD604\uBE48", role: "\uC8FC\uC784", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_49", name: "\uC815\uD61C\uBBFC", role: "\uC8FC\uC784", dept: "\uD53C\uD50C\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_50", name: "\uAE40\uC6D0\uAE30", role: "\uD300\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_51", name: "\uC815\uC9C0\uC6B0", role: "\uBD80\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_52", name: "\uC591\uC18C\uB9AC", role: "\uACFC\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_53", name: "\uAE40\uD6A8\uACB8", role: "\uACFC\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_54", name: "\uC720\uD0DC\uCCA0", role: "\uB300\uB9AC", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_55", name: "\uAE40\uD615\uC900", role: "\uC8FC\uC784", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_56", name: "\uC774\uC608\uC740", role: "\uC8FC\uC784", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_57", name: "\uC815\uC131\uBD09", role: "\uBD80\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_58", name: "\uC815\uC9C4\uADDC", role: "\uBD80\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_59", name: "\uC774\uB3D9\uADDC", role: "\uACFC\uC7A5", dept: "\uD68C\uACC4\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_60", name: "\uAE40\uC900\uBC94", role: "\uC0C1\uBB34", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_61", name: "\uAE40\uACBD\uD6C8", role: "\uD300\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_62", name: "\uAE40\uBBFC\uADDC", role: "\uB300\uB9AC", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_63", name: "\uAE40\uC120\uD615", role: "\uACFC\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_64", name: "\uAE40\uC6A9", role: "\uACFC\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_65", name: "\uAE40\uD61C\uC131", role: "\uACFC\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_66", name: "\uBC31\uAD00\uC900", role: "\uACFC\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_67", name: "\uC190\uBBFC\uC12D", role: "\uACFC\uC7A5", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_68", name: "\uAE40\uC885\uD601", role: "\uB300\uB9AC", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_69", name: "\uB0A8\uD6A8\uC815", role: "\uB300\uB9AC", dept: "\uB9AC\uC5BC\uC5D0\uC14B\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_70", name: "\uC774\uC900\uC11D", role: "\uD300\uC7A5", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_71", name: "\uC548\uC218\uD55C", role: "\uBD80\uC7A5", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_72", name: "\uC784\uB3D9\uC6C5", role: "\uBD80\uC7A5", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_73", name: "\uBC15\uAD11\uC9C4", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_74", name: "\uC591\uC9C4\uAD11", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_75", name: "\uC7A5\uD615\uADDC", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_76", name: "\uC774\uB2E4\uC194", role: "\uC8FC\uC784", dept: "\uACBD\uC601\uAE30\uD68D\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_77", name: "\uBC31\uC885\uCCA0", role: "\uD300\uC7A5", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_78", name: "\uD669\uD0DC\uC218", role: "\uBD80\uC7A5", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_79", name: "\uAE40\uC7AC\uCCA0", role: "\uACFC\uC7A5", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_80", name: "\uCC44\uC218\uC9C4", role: "\uACFC\uC7A5", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_81", name: "\uD3B8\uB3C4\uBBFC", role: "\uACFC\uC7A5", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_82", name: "\uAD8C\uC900\uD638", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_83", name: "\uC784\uC885\uBE48", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_84", name: "\uAE40\uC815\uC6B0", role: "\uC8FC\uC784", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_85", name: "\uAE40\uD0DC\uB9B0", role: "\uC8FC\uC784", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_85b", name: "\uAE40\uC131\uC724", role: "\uB300\uB9AC", dept: "\uACBD\uC601\uC9C0\uC6D0\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_86", name: "\uC815\uC131\uD638", role: "\uD300\uC7A5", dept: "\uC131\uC7A5\uC9C0\uC6D0\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_87", name: "\uC774\uBCF4\uB984", role: "\uB300\uB9AC", dept: "\uC131\uC7A5\uC9C0\uC6D0\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_88", name: "\uBC15\uC720\uBBF8", role: "\uB300\uB9AC", dept: "\uC131\uC7A5\uC9C0\uC6D0\uD300", division: "\uC6B0\uBBF8\uAE00\uB85C\uBC8C", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_89", name: "\uAD8C\uD638\uC900", role: "\uBD80\uC7A5", dept: "\uAC1C\uBC1C\uC601\uC5C52\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_90", name: "\uAE40\uADFC\uBAA8", role: "\uACFC\uC7A5", dept: "\uAC1C\uBC1C\uC601\uC5C52\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_91", name: "\uCD5C\uD604\uC11D", role: "\uBD80\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_92", name: "\uBC15\uC120\uC900", role: "\uBD80\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_93", name: "\uC784\uD615\uC9C4", role: "\uBD80\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_94", name: "\uBCC0\uC815\uC6A9", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_95", name: "\uC7A5\uAD6D\uBC94", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_96", name: "\uBCC0\uC815\uC6A9", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_97", name: "\uC7A5\uAD6D\uBC94", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_98", name: "\uCD5C\uC7AC\uD654", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_99", name: "\uD669\uC815\uD0DC", role: "\uACFC\uC7A5", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_100", name: "\uC774\uC9C4\uD76C", role: "\uB300\uB9AC", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_101", name: "\uB098\uC900\uC601", role: "\uC8FC\uC784", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_102", name: "\uAE40\uB3C4\uC724", role: "\uB300\uB9AC", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_103", name: "\uC7A5\uC8FC\uC740", role: "\uC8FC\uC784", dept: "\uBBFC\uAC04\uC601\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_104", name: "\uC591\uC601\uD55C", role: "\uC804\uBB34", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_105", name: "\uC591\uB3D9\uD76C", role: "\uD300\uC7A5", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_106", name: "\uAE40\uC7AC\uD638", role: "\uC0C1\uBB34", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_107", name: "\uB178\uC744", role: "\uBD80\uC7A5", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_108", name: "\uC774\uC0C1\uC218", role: "\uBD80\uC7A5", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_109", name: "\uAC15\uB300\uD638", role: "\uACFC\uC7A5", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_110", name: "\uBC31\uC9C0\uC740", role: "\uB300\uB9AC", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_111", name: "\uC624\uC900\uACBD", role: "\uB300\uB9AC", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_112", name: "\uC870\uC6C5\uC804", role: "\uB300\uB9AC", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_113", name: "\uAE40\uACBD\uD604", role: "\uC8FC\uC784", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_114", name: "\uBC15\uC724\uC815", role: "\uC8FC\uC784", dept: "PM\uAD00\uB9AC\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_115", name: "\uAC15\uBBFC\uC11D1 /\uD300\uC7A5", role: "\uC0C1\uBB34", dept: "RM\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_116", name: "\uC624\uC0C1\uC900", role: "\uBD80\uC7A5", dept: "RM\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_117", name: "\uC774\uC885\uC12D", role: "\uBD80\uC7A5", dept: "RM\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_118", name: "\uC774\uD0DC\uD76C", role: "\uBD80\uC7A5", dept: "RM\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_119", name: "\uC7A5\uD6A8\uC900", role: "\uB300\uB9AC", dept: "RM\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_120", name: "\uAE40\uC724\uD0DC", role: "\uD300\uC7A5", dept: "\uC900\uBC95\uACBD\uC601\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_121", name: "\uC548\uC218\uD55C", role: "\uBD80\uC7A5", dept: "\uC900\uBC95\uACBD\uC601\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_122", name: "\uC720\uD0DC\uC12D", role: "\uBD80\uC7A5", dept: "\uC900\uBC95\uACBD\uC601\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_123", name: "\uAD6C\uBCF8\uC77C", role: "\uC0C1\uBB34", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_124", name: "\uC870\uC9C4\uD45C", role: "\uC0C1\uBB34", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_125", name: "\uC548\uC601\uC77C", role: "\uBD80\uC7A5", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_126", name: "\uC9C0\uC815\uD6C8", role: "\uBD80\uC7A5", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_127", name: "\uC774\uC2B9\uD604", role: "\uACFC\uC7A5", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_128", name: "\uD55C\uACE0\uC601", role: "\uACFC\uC7A5", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_129", name: "\uC591\uC9C4\uAD11", role: "\uB300\uB9AC", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_130", name: "\uC815\uC694\uC12D", role: "\uB300\uB9AC", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_131", name: "\uAC15\uC218\uC885", role: "\uC8FC\uC784", dept: "\uC790\uAE08\uD300", division: "\uC7AC\uBB34\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_132", name: "\uCD5C\uC7AC\uC601", role: "\uD300\uC7A5", dept: "\uB9AC\uBE59\uC194\uB8E8\uC158\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_133", name: "\uC9C4\uB098\uB77C", role: "\uACFC\uC7A5", dept: "\uB9AC\uBE59\uC194\uB8E8\uC158\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_134", name: "\uAC15\uBBFC\uC11D", role: "\uB300\uB9AC", dept: "\uB9AC\uBE59\uC194\uB8E8\uC158\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_135", name: "\uAE40\uD55C\uAE00", role: "\uB300\uB9AC", dept: "\uB9AC\uBE59\uC194\uB8E8\uC158\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_136", name: "\uC18C\uBBFC\uAD50", role: "\uB300\uB9AC", dept: "\uB9AC\uBE59\uC194\uB8E8\uC158\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_137", name: "\uAC15\uBBFC\uC11D", role: "\uC0C1\uBB34", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_138", name: "\uAC15\uC911\uC6B1", role: "\uD300\uC7A5", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_139", name: "\uD669\uC778\uD638", role: "\uBD80\uC7A5", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_140", name: "\uAE40\uD6A8\uC911", role: "\uBD80\uC7A5", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_141", name: "\uAC15\uBBFC\uC900", role: "\uB300\uB9AC", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_142", name: "\uC774\uB9CC\uC218", role: "\uB300\uB9AC", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_143", name: "\uC8FC\uBBFC\uC900", role: "\uC8FC\uC784", dept: "\uC815\uBCF4\uC804\uB7B5\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_144", name: "\uACE0\uACBD\uC11D", role: "\uD300\uC7A5", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_145", name: "\uC774\uC120\uC77C", role: "\uBD80\uC7A5", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_146", name: "\uAE40\uC724\uD615", role: "\uACFC\uC7A5", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_147", name: "\uAE40\uD55C\uB098", role: "\uACFC\uC7A5", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_148", name: "\uBC15\uC0C1\uD558", role: "\uB300\uB9AC", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_149", name: "\uC870\uC0C8\uBD04", role: "\uC8FC\uC784", dept: "\uBC95\uBB34\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_150", name: "\uC2E0\uBCD1\uAE30", role: "\uD300\uC7A5", dept: "\uCEE4\uBA38\uC15C\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_151", name: "\uAE40\uC900\uD638", role: "\uACFC\uC7A5", dept: "\uCEE4\uBA38\uC15C\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_152", name: "\uC804\uC18C\uD604", role: "\uACFC\uC7A5", dept: "\uCEE4\uBA38\uC15C\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_153", name: "\uAE40\uB2E4\uBE48", role: "\uC8FC\uC784", dept: "\uCEE4\uBA38\uC15C\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_154", name: "\uCC9C\uC131\uD638", role: "\uD300\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_155", name: "\uC548\uAD11\uBBFC", role: "\uBD80\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_156", name: "\uC774\uAC74\uD76C", role: "\uBD80\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_157", name: "\uC784\uD76C\uC218", role: "\uACFC\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_158", name: "\uC724\uC5EC\uC9C4", role: "\uB300\uB9AC", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_159", name: "\uC774\uAE38\uC131", role: "\uBD80\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_160", name: "\uB098\uC2B9\uD6C8", role: "\uACFC\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_161", name: "\uC774\uC778\uD61C", role: "\uACFC\uC7A5", dept: "\uC0C1\uD488\uAC1C\uBC1C\uD300", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_162", name: "\uC815\uBCD1\uC625", role: "\uD300\uC7A5", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_163", name: "\uBC30\uC0C1\uC218", role: "\uBD80\uC7A5", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_164", name: "\uD64D\uC9C0\uD6C8", role: "\uACFC\uC7A5", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_165", name: "\uC591\uC11D\uD658", role: "\uACFC\uC7A5", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_166", name: "\uBC15\uC2B9\uC8FC", role: "\uC8FC\uC784", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_167", name: "\uD669\uC8FC\uC601", role: "\uC8FC\uC784", dept: "\uBCF5\uD569\uC0AC\uC5C5\uD300", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_168", name: "\uAD8C\uC21C\uC870", role: "\uD300\uC7A5", dept: "\uC0AC\uC5C5\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_169", name: "\uC815\uC644", role: "\uBD80\uC7A5", dept: "\uC0AC\uC5C5\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_170", name: "\uCD5C\uD55C\uC8FC", role: "\uB300\uB9AC", dept: "\uC0AC\uC5C5\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_171", name: "\uC7A5\uC720\uC9C4", role: "\uC8FC\uC784", dept: "\uC0AC\uC5C5\uAE30\uD68D\uD300", division: "PM\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_172", name: "\uC2E0\uBBFC\uD638", role: "\uD300\uC7A5", dept: "\uD64D\uBCF4\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_173", name: "\uC2E0\uD76C\uC601", role: "\uBD80\uC7A5", dept: "\uD64D\uBCF4\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_174", name: "\uB0A8\uC0C1\uBD80", role: "\uBD80\uC7A5", dept: "\uD64D\uBCF4\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_175", name: "\uAE38\uC131\uD658", role: "\uACFC\uC7A5", dept: "\uD64D\uBCF4\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_176", name: "\uC591\uC740\uC11D", role: "\uB300\uB9AC", dept: "\uD64D\uBCF4\uD300", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_177", name: "\uC815\uC0C1\uC77C", role: "\uD300\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_178", name: "\uD669\uD615\uC5F0", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_179", name: "\uAE40\uACBD\uC644", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_180", name: "\uAE40\uC5F0\uCCA0", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_181", name: "\uBC15\uCC2C\uD6C8", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_182", name: "\uC7A5\uC138\uBBFC", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_183", name: "\uC870\uACBD\uD658", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_184", name: "\uCD5C\uB3D9\uC11D", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_185", name: "\uC774\uC218\uB3D9", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_186", name: "\uC870\uC601\uC6B0", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_187", name: "\uAE40\uC9C0\uC724", role: "\uC8FC\uC784", dept: "\uAC74\uCD95\uAE30\uD68D\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_188", name: "\uC774\uD0DC\uD638", role: "\uD300\uC7A5", dept: "EM\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_189", name: "\uAE40\uC815\uC12D", role: "\uBD80\uC7A5", dept: "EM\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_190", name: "\uCD5C\uC815\uC6B1", role: "\uBD80\uC7A5", dept: "EM\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_191", name: "\uAE40\uC9C4\uC2DD", role: "\uD300\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_192", name: "\uC774\uC9C0\uD658", role: "\uBD80\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_193", name: "\uAE40\uB355\uB960", role: "\uBD80\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_194", name: "\uC815\uC0C1\uD6C8", role: "\uBD80\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_195", name: "\uC870\uB9CC\uAE30", role: "\uACFC\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_196", name: "\uC774\uC900\uD638", role: "\uBD80\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_197", name: "\uC131\uC694\uD55C", role: "\uACFC\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_198", name: "\uC815\uB300\uACC4", role: "\uACFC\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_199", name: "\uC591\uD615\uC9C1", role: "\uACFC\uC7A5", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_200", name: "\uAE40\uC644\uC218", role: "\uB300\uB9AC", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_201", name: "\uAE40\uCC44\uC601", role: "\uC8FC\uC784", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_202", name: "\uCC28\uC2B9\uD638", role: "\uC8FC\uC784", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_203", name: "\uC815\uC601\uC740", role: "\uC8FC\uC784", dept: "\uD488\uC9C8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_204", name: "\uBCC0\uC0C1\uAE30", role: "\uD300\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_205", name: "\uC7A5\uC7AC\uC601", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_206", name: "\uC815\uC77C\uBA85", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_207", name: "\uACBD\uB3D9\uADDC", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_208", name: "\uAE40\uD604\uC218", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_209", name: "\uACE0\uBCD1\uADDC", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_210", name: "\uC774\uC81C\uD604", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_211", name: "\uAE40\uC7AC\uC131", role: "\uB300\uB9AC", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_212", name: "\uAE40\uC138\uB9BC", role: "\uB300\uB9AC", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_213", name: "\uC774\uC694\uD55C", role: "\uB300\uB9AC", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_214", name: "\uB0A8\uAD11\uD604", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_215", name: "\uC720\uC9C4\uC218", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_216", name: "\uBC15\uC131\uD604", role: "\uACFC\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_217", name: "\uC774\uC2B9\uC9C4", role: "\uBD80\uC7A5", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_218", name: "\uC815\uC2B9\uD658", role: "\uB300\uB9AC", dept: "\uAC74\uCD95\uC608\uC0B0\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_219", name: "\uC724\uC9C4\uD638", role: "\uD300\uC7A5", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_220", name: "\uBC15\uD604\uD638", role: "\uBD80\uC7A5", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_221", name: "\uC8FC\uC131\uD558", role: "\uACFC\uC7A5", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_222", name: "\uACE0\uD0DC\uD638", role: "\uB300\uB9AC", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_223", name: "\uAE40\uB300\uACBD", role: "\uB300\uB9AC", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_224", name: "\uAE40\uB2E4\uC778", role: "\uC8FC\uC784", dept: "\uC678\uC8FC\uAD00\uB9AC\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_225", name: "\uC870\uC644\uD638", role: "\uD300\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uC6B4\uC601\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_226", name: "\uC7A5\uC724\uC2DD", role: "\uBD80\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uC6B4\uC601\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_227", name: "\uCD5C\uC778\uC5FD", role: "\uACFC\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uC6B4\uC601\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_228", name: "\uC131\uC9C4\uC6B1", role: "\uACFC\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uC6B4\uC601\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_229", name: "\uC774\uC2B9\uADDC", role: "\uC8FC\uC784", dept: "\uC548\uC804\uBCF4\uAC74\uC6B4\uC601\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_230", name: "\uCD5C\uD604\uC12D", role: "\uD300\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_231", name: "\uAE40\uC0C1\uAE30", role: "\uBD80\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_232", name: "\uAE40\uC885\uC12D", role: "\uBD80\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_233", name: "\uBC30\uC815\uD55C", role: "\uBD80\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_234", name: "\uAD6C\uC11D\uC9C4", role: "\uBD80\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_235", name: "\uC870\uBBFC\uC885", role: "\uACFC\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_236", name: "\uCD5C\uCC3D\uC8FC", role: "\uC8FC\uC784", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_237", name: "\uC774\uC601\uB3D9", role: "\uC8FC\uC784", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_238", name: "\uCD5C\uC601\uD544", role: "\uBD80\uC7A5", dept: "\uC778\uD504\uB77C\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_239", name: "\uC815\uAE30\uBC94", role: "\uD300\uC7A5", dept: "\uC218\uC8FC\uAE30\uD68D\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_240", name: "\uBC15\uCCA0\uD658", role: "\uBD80\uC7A5", dept: "\uC218\uC8FC\uAE30\uD68D\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_241", name: "\uC720\uC815\uD604", role: "\uACFC\uC7A5", dept: "\uC218\uC8FC\uAE30\uD68D\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_242", name: "\uC774\uBBFC\uD615", role: "\uB300\uB9AC", dept: "\uC218\uC8FC\uAE30\uD68D\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_243", name: "\uAE40\uB300\uC11D", role: "\uC8FC\uC784", dept: "\uC218\uC8FC\uAE30\uD68D\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_244", name: "\uC774\uC2B9\uD5CC", role: "\uD300\uC7A5", dept: "\uC790\uC7AC\uAD6C\uB9E4\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_245", name: "\uC804\uAE38\uC218", role: "\uBD80\uC7A5", dept: "\uC790\uC7AC\uAD6C\uB9E4\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_246", name: "\uC8FC\uC11D\uC9C4", role: "\uBD80\uC7A5", dept: "\uC790\uC7AC\uAD6C\uB9E4\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_247", name: "\uC8FC\uD638\uC9C4", role: "\uACFC\uC7A5", dept: "\uC790\uC7AC\uAD6C\uB9E4\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_248", name: "\uBC15\uBCF4\uACBD", role: "\uC8FC\uC784", dept: "\uC790\uC7AC\uAD6C\uB9E4\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_249", name: "\uC624\uC885\uC624", role: "\uD300\uC7A5", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_250", name: "\uAE40\uD615\uB3D9", role: "\uBD80\uC7A5", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_251", name: "\uC804\uD638\uD76C", role: "\uBD80\uC7A5", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_252", name: "\uC774\uD638\uC548", role: "\uACFC\uC7A5", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_253", name: "\uCD5C\uD61C\uC601", role: "\uACFC\uC7A5", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_254", name: "\uAE40\uC9C0\uC601", role: "\uC8FC\uC784", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_255", name: "\uC81C\uC9C0\uC608", role: "\uC8FC\uC784", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_256", name: "\uC815\uD0DC\uC218", role: "\uB300\uB9AC", dept: "CS\uD300", division: "\uC678\uC8FC\uAD6C\uB9E4\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_257", name: "\uC870\uC644\uD638", role: "\uD300\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_258", name: "\uC774\uBA85\uACC4", role: "\uBD80\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_259", name: "\uC2EC\uC601\uBAA9", role: "\uACFC\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_260", name: "\uC804\uD604\uCCA0", role: "\uACFC\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_261", name: "\uC704\uD61C\uC9C4", role: "\uACFC\uC7A5", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_262", name: "\uC720\uC9C0\uC740", role: "\uC8FC\uC784", dept: "\uC548\uC804\uBCF4\uAC74\uAE30\uD68D\uD300", division: "\uC548\uC804\uBCF4\uAC74\uC2E4", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_263", name: "\uBC30\uC131\uBBFC", role: "\uD300\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_264", name: "\uBC15\uC7AC\uB9CC", role: "\uBD80\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_265", name: "\uAE40\uC885\uBB38", role: "\uBD80\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_266", name: "\uC5EC\uC2B9\uC724", role: "\uACFC\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_267", name: "\uC1A1\uCC3D\uC8FC", role: "\uACFC\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_268", name: "\uBC15\uC6A9\uBC94", role: "\uACFC\uC7A5", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_269", name: "\uCD5C\uC724\uC11D", role: "\uB300\uB9AC", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_270", name: "\uAE40\uCC2C\uAE30", role: "\uB300\uB9AC", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_271", name: "\uAD8C\uC6A9\uCC2C", role: "\uC8FC\uC784", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_272", name: "\uC720\uB098\uC601", role: "\uC8FC\uC784", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_273", name: "\uC815\uC11C\uC728", role: "\uC8FC\uC784", dept: "\uACF5\uACF5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_274", name: "\uC655\uC131\uC6A9", role: "\uD300\uC7A5", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_275", name: "\uCD5C\uC6D0\uCCA0", role: "\uBD80\uC7A5", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_276", name: "\uAE40\uD0DC\uBBFC", role: "\uACFC\uC7A5", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_277", name: "\uC870\uC6B1\uB798", role: "\uACFC\uC7A5", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_278", name: "\uC7A5\uC601\uD6C8", role: "\uB300\uB9AC", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_279", name: "\uC774\uC9C0\uD76C", role: "\uB300\uB9AC", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_280", name: "\uAE40\uC138\uC6D0", role: "\uC8FC\uC784", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_281", name: "\uC720\uC9C4\uD601", role: "\uC8FC\uC784", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_282", name: "\uAE40\uC608\uD658", role: "\uC8FC\uC784", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_283", name: "\uD669\uC608\uC740", role: "\uC8FC\uC784", dept: "\uC804\uB7B5\uC0AC\uC5C5\uD300", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_284", name: "\uC624\uACBD\uADFC", role: "\uD300\uC7A5", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_285", name: "\uBC15\uC2AC\uAE30", role: "\uACFC\uC7A5", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_286", name: "\uCD5C\uC601\uC900", role: "\uACFC\uC7A5", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_287", name: "\uAE40\uC9C4\uC6B1", role: "\uB300\uB9AC", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_288", name: "\uC2E0\uC7AC\uC775", role: "\uB300\uB9AC", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_289", name: "\uC548\uCC2C\uC885", role: "\uB300\uB9AC", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_290", name: "\uD604\uC0C1\uD5CC", role: "\uB300\uB9AC", dept: "\uC2A4\uB9C8\uD2B8\uAE30\uC220\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_291", name: "\uC624\uACBD\uADFC", role: "\uD300\uC7A5", dept: "PI\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_292", name: "\uAE40\uC740\uC0C1", role: "\uBD80\uC7A5", dept: "PI\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_293", name: "\uCD5C\uC601\uBB38", role: "\uACFC\uC7A5", dept: "PI\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "ph_294", name: "\uC870\uAD6D\uD604", role: "\uB300\uB9AC", dept: "PI\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "ph_295", name: "\uC870\uB3D9\uD604", role: "\uC8FC\uC784", dept: "PI\uD300", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: false, status: "\uAC00\uB2A5", weekly: {}, freezeStartedAt: null },
+  { id: "exec_1", name: "\uACFD\uC218\uC724", role: "\uB300\uD45C", dept: "\uB300\uD45C\uC774\uC0AC", division: null, canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_2", name: "\uAE40\uC601\uAE38", role: "\uB300\uD45C", dept: "\uB300\uD45C\uC774\uC0AC", division: null, canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_3", name: "\uAE40\uC131\uCCA0", role: "\uB300\uD45C", dept: "\uB300\uD45C\uC774\uC0AC", division: null, canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_4", name: "\uC7A5\uB3D9\uC11D", role: "\uC804\uBB34", dept: "\uACBD\uC601\uBCF8\uBD80", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_5", name: "\uD669\uC7AC\uD638", role: "\uC0C1\uBB34", dept: "\uACBD\uC601\uBCF8\uBD80", division: "\uACBD\uC601\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_6", name: "\uC774\uC7A5\uC6D0", role: "\uC804\uBB34", dept: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_7", name: "\uBC15\uC6A9\uD558", role: "\uC0C1\uBB34", dept: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_8", name: "\uAE40\uC9C4\uC11D", role: "\uC0C1\uBB34", dept: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", division: "\uAC1C\uBC1C\uC601\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_9", name: "\uC591\uC601\uD55C", role: "\uC804\uBB34", dept: "PM\uC2E4", division: "PM\uC2E4", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_10", name: "\uC624\uBCD1\uC9C4", role: "\uC804\uBB34", dept: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", division: "\uAC74\uCD95\uB514\uC790\uC778\uC2E4", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_11", name: "\uC774\uB9CC\uC6C5", role: "\uC804\uBB34", dept: "\uAC74\uCD95\uBCF8\uBD80", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_12", name: "\uAE40\uD61C\uC6D0", role: "\uC0C1\uBB34", dept: "\uAC74\uCD95\uBCF8\uBD80", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_13", name: "\uBB38\uC0C1\uCCA0", role: "\uC0C1\uBB34", dept: "\uAC74\uCD95\uBCF8\uBD80", division: "\uAC74\uCD95\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_14", name: "\uAD6C\uBCF8\uC77C", role: "\uC0C1\uBB34", dept: "\uC7AC\uBB34\uC2E4", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_15", name: "\uC870\uC9C4\uD45C", role: "\uC0C1\uBB34", dept: "\uC7AC\uBB34\uC2E4", division: "\uC7AC\uBB34\uC2E4", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_16", name: "\uAE40\uC9C4", role: "\uC0C1\uBB34", dept: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_17", name: "\uD64D\uAC74\uD45C", role: "\uC0C1\uBB34", dept: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null },
+  { id: "exec_18", name: "\uAE40\uCCA0\uD638", role: "\uC0C1\uBB34", dept: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", division: "\uACF5\uACF5\uC0AC\uC5C5\uBCF8\uBD80", canApprove: true, status: "\uAC00\uB2A5", isExecutiveLevel: true, weekly: { \uC6D4: ["\uC624\uC804", "\uC624\uD6C4"], \uD654: ["\uC624\uC804", "\uC624\uD6C4"], \uC218: ["\uC624\uC804", "\uC624\uD6C4"], \uBAA9: ["\uC624\uC804", "\uC624\uD6C4"], \uAE08: ["\uC624\uC804", "\uC624\uD6C4"] }, freezeStartedAt: null }
+];
+function uid(prefix) {
+  return prefix + "_" + Math.random().toString(36).slice(2, 9);
+}
+function todayKey() {
+  const idx = (/* @__PURE__ */ new Date()).getDay();
+  return DAYS[idx - 1] || null;
+}
+function useStorage() {
+  const [ready, setReady] = useState(false);
+  const [people, setPeople] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [history, setHistory] = useState([]);
+  const pollRef = useRef(null);
+  const loadAll = useCallback(async () => {
+    try {
+      let storedVersion = null;
+      try {
+        const rv = await window.storage.get("seed_version", true);
+        storedVersion = rv ? rv.value : null;
+      } catch (e) {
+        storedVersion = null;
+      }
+      const versionMismatch = storedVersion !== SEED_VERSION;
+      let peopleData;
+      if (versionMismatch) {
+        peopleData = null;
+      } else {
+        try {
+          const r = await window.storage.get("people", true);
+          peopleData = r ? JSON.parse(r.value) : null;
+        } catch (e) {
+          peopleData = null;
+        }
+      }
+      if (!peopleData) {
+        peopleData = SEED_PEOPLE;
+        await window.storage.set("people", JSON.stringify(peopleData), true);
+        await window.storage.set("seed_version", SEED_VERSION, true);
+      }
+      setPeople(peopleData);
+      let queueData;
+      try {
+        const r = await window.storage.get("queue", true);
+        queueData = r ? JSON.parse(r.value) : null;
+      } catch (e) {
+        queueData = null;
+      }
+      if (!queueData || versionMismatch) {
+        queueData = [];
+        await window.storage.set("queue", JSON.stringify(queueData), true);
+      }
+      setQueue(queueData);
+      let historyData;
+      try {
+        const r = await window.storage.get("history", true);
+        historyData = r ? JSON.parse(r.value) : null;
+      } catch (e) {
+        historyData = null;
+      }
+      if (!historyData) {
+        historyData = [];
+        await window.storage.set("history", JSON.stringify(historyData), true);
+      }
+      setHistory(historyData);
+      setReady(true);
+    } catch (e) {
+      console.error("load error", e);
+      setPeople(SEED_PEOPLE);
+      setQueue([]);
+      setHistory([]);
+      setReady(true);
+    }
+  }, []);
+  useEffect(() => {
+    loadAll();
+    pollRef.current = setInterval(loadAll, 2500);
+    return () => clearInterval(pollRef.current);
+  }, [loadAll]);
+  const savePeople = useCallback(async (next) => {
+    setPeople(next);
+    try {
+      await window.storage.set("people", JSON.stringify(next), true);
+    } catch (e) {
+    }
+  }, []);
+  const saveQueue = useCallback(async (next) => {
+    setQueue(next);
+    try {
+      await window.storage.set("queue", JSON.stringify(next), true);
+    } catch (e) {
+    }
+  }, []);
+  const saveHistory = useCallback(async (next) => {
+    setHistory(next);
+    try {
+      await window.storage.set("history", JSON.stringify(next), true);
+    } catch (e) {
+    }
+  }, []);
+  return { ready, people, queue, history, savePeople, saveQueue, saveHistory, reload: loadAll };
+}
+const MIN_HISTORY_SAMPLE = 3;
+const MAX_HISTORY_PER_APPROVER = 30;
+function getApproverCorrection(history, approverId) {
+  const entries = history.filter((h) => h.approverId === approverId).slice(-MAX_HISTORY_PER_APPROVER);
+  if (entries.length < MIN_HISTORY_SAMPLE) {
+    return { factor: 1, sampleSize: entries.length, ready: false };
+  }
+  const totalEst = entries.reduce((s, h) => s + h.estMinutes, 0);
+  const totalActual = entries.reduce((s, h) => s + h.actualMinutes, 0);
+  if (totalEst <= 0) return { factor: 1, sampleSize: entries.length, ready: false };
+  let factor = totalActual / totalEst;
+  factor = Math.max(0.5, Math.min(2, factor));
+  return { factor, sampleSize: entries.length, ready: true };
+}
+function formatFactorLabel(factor) {
+  const pct = Math.round((factor - 1) * 100);
+  if (pct === 0) return "\uC608\uC0C1\uACFC \uBE44\uC2B7\uD574\uC694";
+  if (pct > 0) return `\uD3C9\uADE0 ${pct}% \uB354 \uAC78\uB824\uC694`;
+  return `\uD3C9\uADE0 ${Math.abs(pct)}% \uB354 \uBE68\uB77C\uC694`;
+}
+function waitingListFor(queue, approverId) {
+  return queue.filter((q) => q.approverId === approverId && (q.status === "waiting" || q.status === "called")).sort((a, b) => a.order - b.order);
+}
+function activeTicketFor(queue, personId) {
+  return queue.find((q) => q.reporterId === personId && (q.status === "waiting" || q.status === "called" || q.status === "in_progress"));
+}
+function StatusBadge({ status }) {
+  const map = {
+    \uAC00\uB2A5: { bg: "#EAF4EE", fg: "#2E7048", label: "\uAC00\uB2A5" },
+    \uC77C\uC2DC\uC911\uB2E8: { bg: "#FDF3EA", fg: ORANGE_DEEP, label: "\uC77C\uC2DC\uC911\uB2E8" },
+    \uBD88\uAC00: { bg: "#F5E9E7", fg: RED, label: "\uBD88\uAC00" }
+  };
+  const s = map[status] || map["\uAC00\uB2A5"];
+  return /* @__PURE__ */ React.createElement("span", { style: { background: s.bg, color: s.fg, fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 8 } }, s.label);
+}
+function Avatar({ name, size, tone }) {
+  const sz = size || 40;
+  const bg = tone === "cream" ? "#E2DED4" : `linear-gradient(135deg, ${NAVY2}, ${NAVY})`;
+  const fg = tone === "cream" ? NAVY : "#fff";
+  return /* @__PURE__ */ React.createElement("div", { style: { width: sz, height: sz, borderRadius: sz * 0.3, background: bg, color: fg, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: sz * 0.32, flexShrink: 0, fontFamily: "'Space Grotesk', sans-serif" } }, name.slice(0, 2));
+}
+function SectionTitle({ children }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 12 } }, children);
+}
+function FieldLabel({ children }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, fontWeight: 700, color: NAVY, marginBottom: 8 } }, children);
+}
+function MiniStat({ num, label }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 11, padding: "9px 10px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: "#fff", fontFamily: "'Space Grotesk', sans-serif" } }, num), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#C9D3DE", marginTop: 1 } }, label));
+}
+function Chip({ children }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.22)", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#fff" } }, children);
+}
+function PreviewRow({ k, v, orange }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "7px 0", fontSize: 13, borderBottom: "1px solid #F3F1EB" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#9A9689" } }, k), /* @__PURE__ */ React.createElement("div", { style: { color: orange ? ORANGE_DEEP : NAVY, fontWeight: 700 } }, v));
+}
+function TopBar({ title, onBack }) {
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "14px 20px 10px", background: CREAM } }, /* @__PURE__ */ React.createElement("div", { onClick: onBack, style: { fontSize: 20, color: NAVY, cursor: "pointer", fontWeight: 700 } }, "\u2039"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: NAVY } }, title));
+}
+function ToastBanner({ toast, onDismiss }) {
+  if (!toast) return null;
+  return /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      onClick: onDismiss,
+      style: {
+        position: "fixed",
+        top: 14,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 999,
+        width: 360,
+        maxWidth: "92vw",
+        background: "#0F2B52",
+        border: `1.5px solid ${ORANGE}`,
+        borderRadius: 14,
+        padding: "13px 16px",
+        boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+        animation: "slideIn 0.25s ease-out",
+        cursor: "pointer"
+      }
+    },
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#fff" } }, toast.title),
+    toast.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE", marginTop: 3 } }, toast.desc)
+  );
+}
+function LoginScreen({ people, onLogin }) {
+  const [mode, setMode] = useState("pick");
+  const [selectedId, setSelectedId] = useState("");
+  const [pickSearch, setPickSearch] = useState("");
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("\uB300\uB9AC");
+  const [dept, setDept] = useState("");
+  const submitPick = () => {
+    const p = people.find((x) => x.id === selectedId);
+    if (!p) return;
+    onLogin({ id: p.id, name: p.name, role: p.role, dept: p.dept, division: p.division, canApprove: p.canApprove });
+  };
+  const submitManual = () => {
+    if (!name.trim() || !dept.trim()) return;
+    const canApprove = APPROVER_ROLES.indexOf(role) !== -1;
+    onLogin({ id: uid("guest"), name: name.trim(), role, dept: dept.trim(), division: null, canApprove, isGuest: true });
+  };
+  const pickFiltered = pickSearch.trim() ? people.filter((p) => p.name.indexOf(pickSearch) !== -1 || p.dept.indexOf(pickSearch) !== -1 || p.division && p.division.indexOf(pickSearch) !== -1) : people;
+  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 380, maxWidth: "100%" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginBottom: 22 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: NAVY } }, "\uBCF4\uACE0", /* @__PURE__ */ React.createElement("span", { style: { color: ORANGE } }, "PASS")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: "#8A8578", marginTop: 6 } }, "\uC2DC\uC791\uD558\uAE30 \uC804\uC5D0 \uBCF8\uC778 \uC815\uBCF4\uB97C \uC785\uB825\uD574\uC8FC\uC138\uC694")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("pick"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "pick" ? ORANGE : "#fff", color: mode === "pick" ? "#fff" : NAVY, boxShadow: mode === "pick" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC870\uC9C1\uB3C4\uC5D0\uC11C \uC120\uD0DD"), /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("manual"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "manual" ? ORANGE : "#fff", color: mode === "manual" ? "#fff" : NAVY, boxShadow: mode === "manual" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC9C1\uC811 \uC785\uB825")), mode === "pick" && /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 16, padding: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9A9689", marginBottom: 10 } }, "\uC774\uB984, \uD300, \uBCF8\uBD80\uB85C \uAC80\uC0C9\uD574\uC11C \uBCF8\uC778\uC744 \uCC3E\uC73C\uC138\uC694"), /* @__PURE__ */ React.createElement("input", { value: pickSearch, onChange: (e) => setPickSearch(e.target.value), placeholder: "\uC608: \uAE40\uC138\uB9BC, \uAC74\uCD95\uC608\uC0B0\uD300, \uAC74\uCD95\uBCF8\uBD80", style: Object.assign({}, inputStyle, { marginBottom: 12 }) }), /* @__PURE__ */ React.createElement("div", { style: { maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } }, pickFiltered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "24px 0", color: "#B0ABA0", fontSize: 12 } }, "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC5B4\uC694."), pickFiltered.map((p) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: p.id,
+      onClick: () => setSelectedId(p.id),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "9px 10px",
+        borderRadius: 10,
+        background: selectedId === p.id ? "#FDF3EA" : "#F7F5F0",
+        border: selectedId === p.id ? `1.5px solid ${ORANGE}` : "1px solid transparent",
+        cursor: "pointer"
+      }
+    },
+    /* @__PURE__ */ React.createElement(Avatar, { name: p.name, size: 30, tone: "cream" }),
+    /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: NAVY } }, p.name, " ", p.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#9A9689" } }, p.division ? p.division + " \xB7 " : "", p.dept)),
+    p.canApprove && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9.5, fontWeight: 700, color: NAVY2, background: "#EDF3F8", padding: "2px 6px", borderRadius: 6 } }, "\uACB0\uC7AC \uAC00\uB2A5")
+  ))), /* @__PURE__ */ React.createElement("button", { disabled: !selectedId, onClick: submitPick, style: Object.assign({}, primaryBtn, { marginTop: 14, opacity: selectedId ? 1 : 0.4 }) }, "\uC2DC\uC791\uD558\uAE30")), mode === "manual" && /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 16, padding: 16 } }, /* @__PURE__ */ React.createElement(FieldLabel, null, "\uC774\uB984"), /* @__PURE__ */ React.createElement("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "\uC608: \uD64D\uAE38\uB3D9", style: inputStyle }), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement(FieldLabel, null, "\uC9C1\uAE09"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 } }, ["\uB300\uD45C", "\uC804\uBB34", "\uC0C1\uBB34", "\uD300\uC7A5", "\uBD80\uC7A5", "\uACFC\uC7A5", "\uB300\uB9AC", "\uC8FC\uC784"].map((r) => /* @__PURE__ */ React.createElement("button", { key: r, onClick: () => setRole(r), style: Object.assign({}, pillBtn, { padding: "8px 12px", fontSize: 12 }, role === r ? pillBtnActive : {}) }, r))), /* @__PURE__ */ React.createElement(FieldLabel, null, "\uBD80\uC11C"), /* @__PURE__ */ React.createElement("input", { value: dept, onChange: (e) => setDept(e.target.value), placeholder: "\uC608: \uC601\uC5C5\uAE30\uD68D\uD300", style: inputStyle }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#B0ABA0", marginTop: 8, marginBottom: 14 } }, APPROVER_ROLES.indexOf(role) !== -1 ? "\uC774 \uC9C1\uAE09\uC740 \uACB0\uC7AC\uC790 \uBAA8\uB4DC\uB3C4 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC5B4\uC694." : "\uC774 \uC9C1\uAE09\uC740 \uBCF4\uACE0\uC790 \uBAA8\uB4DC\uB9CC \uC0AC\uC6A9\uD560 \uC218 \uC788\uC5B4\uC694."), /* @__PURE__ */ React.createElement("button", { disabled: !name.trim() || !dept.trim(), onClick: submitManual, style: Object.assign({}, primaryBtn, { opacity: name.trim() && dept.trim() ? 1 : 0.4 }) }, "\uC2DC\uC791\uD558\uAE30"))));
+}
+function ReporterFlow({ people, queue, saveQueue, history, saveHistory, me, pushToast }) {
+  const [step, setStep] = useState("select");
+  const [selectedId, setSelectedId] = useState(null);
+  const [favorites, setFavorites] = useState([]);
+  const [search, setSearch] = useState("");
+  const [content, setContent] = useState("");
+  const [estMinutes, setEstMinutes] = useState(10);
+  const [urgent, setUrgent] = useState(false);
+  const [myTicketId, setMyTicketId] = useState(null);
+  const prevStatusRef = useRef({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("favorites_" + me.id, false);
+        if (r) setFavorites(JSON.parse(r.value));
+      } catch (e) {
+      }
+    })();
+  }, [me.id]);
+  useEffect(() => {
+    const mine = activeTicketFor(queue, me.id);
+    if (mine) {
+      if (mine.id !== myTicketId) {
+        setMyTicketId(mine.id);
+        setSelectedId(mine.approverId);
+      }
+      if (step === "select" || step === "schedule" || step === "form") setStep("waiting");
+    } else if (myTicketId) {
+      setMyTicketId(null);
+    }
+  }, [queue, me.id]);
+  useEffect(() => {
+    const mine = queue.find((q) => q.id === myTicketId);
+    if (!mine) return;
+    const prev = prevStatusRef.current[mine.id];
+    if (prev !== "called" && mine.status === "called") {
+      pushToast({ title: "\u{1F514} \uC9C0\uAE08 \uC785\uC7A5\uD558\uC138\uC694!", desc: "5\uBD84 \uC774\uB0B4\uC5D0 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC73C\uBA74 \uC21C\uC11C\uAC00 2\uBC88\uC9F8\uB85C \uBC00\uB824\uC694." });
+    }
+    prevStatusRef.current[mine.id] = mine.status;
+  }, [queue, myTicketId]);
+  const toggleFavorite = async (id) => {
+    const next = favorites.indexOf(id) !== -1 ? favorites.filter((f) => f !== id) : favorites.concat([id]);
+    setFavorites(next);
+    try {
+      await window.storage.set("favorites_" + me.id, JSON.stringify(next), false);
+    } catch (e) {
+    }
+  };
+  const selected = people.find((a) => a.id === selectedId);
+  const isSearching = search.trim().length > 0;
+  const selectablePool = people.filter((a) => a.id !== me.id && (a.isExecutiveLevel || a.role === "\uD300\uC7A5"));
+  const filtered = isSearching ? selectablePool.filter((a) => a.name.indexOf(search) !== -1 || a.role.indexOf(search) !== -1 || a.dept.indexOf(search) !== -1 || a.division && a.division.indexOf(search) !== -1) : selectablePool.filter((a) => a.dept === me.dept && a.role === "\uD300\uC7A5" || a.isExecutiveLevel && a.division && a.division === me.division);
+  const sortedFiltered = filtered.slice().sort((a, b) => (b.isExecutiveLevel ? 1 : 0) - (a.isExecutiveLevel ? 1 : 0));
+  const favList = selectablePool.filter((a) => favorites.indexOf(a.id) !== -1);
+  const groups = {};
+  sortedFiltered.forEach((a) => {
+    groups[a.dept] = groups[a.dept] || [];
+    groups[a.dept].push(a);
+  });
+  const list = selected ? waitingListFor(queue, selected.id) : [];
+  const today = todayKey();
+  const todaySlots = selected && today ? selected.weekly[today] || [] : [];
+  const isFrozen = selected && selected.status === "\uC77C\uC2DC\uC911\uB2E8";
+  const submit = async () => {
+    if (!selected || !content.trim()) return;
+    const currentList = waitingListFor(queue, selected.id);
+    const maxOrder = currentList.length ? Math.max.apply(null, currentList.map((q) => q.order)) : 0;
+    const ticket = {
+      id: uid("ticket"),
+      approverId: selected.id,
+      reporterId: me.id,
+      reporterName: me.name,
+      content: content.trim(),
+      estMinutes,
+      urgent,
+      order: maxOrder + 1,
+      status: "waiting",
+      createdAt: Date.now(),
+      calledAt: null,
+      calledVia: null,
+      pushedNotice: null,
+      orderSwapNotice: null
+    };
+    const next = queue.concat([ticket]);
+    await saveQueue(next);
+    setMyTicketId(ticket.id);
+    setStep("waiting");
+  };
+  const cancelTicket = async () => {
+    const next = queue.filter((q) => q.id !== myTicketId);
+    await saveQueue(next);
+    setMyTicketId(null);
+    setStep("select");
+    setSelectedId(null);
+    setContent("");
+  };
+  const finishTicketWithHistory = async () => {
+    const myTicket = queue.find((q) => q.id === myTicketId);
+    if (myTicket && myTicket.startedAt) {
+      const actualMinutes = Math.max(1, Math.round((Date.now() - myTicket.startedAt) / 6e4));
+      const entry = {
+        id: uid("hist"),
+        approverId: myTicket.approverId,
+        reporterId: myTicket.reporterId,
+        estMinutes: myTicket.estMinutes,
+        actualMinutes,
+        ts: Date.now()
+      };
+      await saveHistory(history.concat([entry]));
+    }
+    const next = queue.filter((q) => q.id !== myTicketId);
+    await saveQueue(next);
+    setMyTicketId(null);
+    setStep("select");
+    setSelectedId(null);
+    setContent("");
+  };
+  const confirmGoingNow = async () => {
+    const next = queue.map((q) => q.id === myTicketId ? Object.assign({}, q, { status: "in_progress", startedAt: Date.now() }) : q);
+    await saveQueue(next);
+  };
+  const pushBackOrder = async () => {
+    if (!selected) return;
+    const currentList = waitingListFor(queue, selected.id);
+    const myIndex = currentList.findIndex((q) => q.id === myTicketId);
+    if (myIndex === -1 || myIndex >= currentList.length - 1) return;
+    const myTicketObj = currentList[myIndex];
+    const nextTicketObj = currentList[myIndex + 1];
+    const swapTag = me.name + "_swap_" + Date.now();
+    const next = queue.map((q) => {
+      if (q.id === myTicketObj.id) return Object.assign({}, q, { order: nextTicketObj.order });
+      if (q.id === nextTicketObj.id) return Object.assign({}, q, { order: myTicketObj.order, orderSwapNotice: swapTag });
+      return q;
+    });
+    await saveQueue(next);
+  };
+  if (step === "select") {
+    return /* @__PURE__ */ React.createElement("div", { style: pageStyle }, /* @__PURE__ */ React.createElement("div", { style: headerBand }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: ORANGE, fontWeight: 700, letterSpacing: 1 } }, "\uBCF4\uACE0\uC790 \xB7 ", me.name, " ", me.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: "#fff", marginTop: 4 } }, "\uACB0\uC7AC\uC790 \uC120\uD0DD"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: "#C9D3DE", marginTop: 4 } }, "\uBCF4\uACE0\uD560 \uB300\uC0C1\uC744 \uAC80\uC0C9\uD558\uAC70\uB098 \uC990\uACA8\uCC3E\uAE30\uC5D0\uC11C \uC120\uD0DD\uD558\uC138\uC694"), /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "\uC774\uB984, \uC9C1\uCC45, \uBD80\uC11C\uB85C \uAC80\uC0C9", style: searchInput })), /* @__PURE__ */ React.createElement("div", { style: bodyStyle }, favList.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionTitle, null, "\uC990\uACA8\uCC3E\uAE30"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, marginBottom: 20 } }, favList.map((a) => {
+      const aQueue = waitingListFor(queue, a.id);
+      return /* @__PURE__ */ React.createElement("div", { key: a.id, onClick: () => setSelectedId(a.id), style: { flexShrink: 0, width: 90, background: "#fff", border: `1.5px solid ${selectedId === a.id ? ORANGE : "#E4E2DC"}`, borderRadius: 14, padding: 12, textAlign: "center", cursor: "pointer" } }, /* @__PURE__ */ React.createElement(Avatar, { name: a.name, size: 38 }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: NAVY, marginTop: 6 } }, a.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9.5, color: "#9A9689" } }, a.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: a.status === "\uAC00\uB2A5" ? "#2E7048" : ORANGE_DEEP, marginTop: 3, fontWeight: 700 } }, a.status === "\uAC00\uB2A5" ? "\uB300\uAE30 " + aQueue.length + "\uBA85" : a.status));
+    }))), Object.keys(groups).length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#B0ABA0", fontSize: 12.5 } }, isSearching ? "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC5B4\uC694." : "\uC6B0\uB9AC \uD300 \uD300\uC7A5\uB2D8\uC774\uB098 \uC784\uC6D0 \uC815\uBCF4\uAC00 \uC5C6\uC5B4\uC694. \uAC80\uC0C9\uC73C\uB85C \uB2E4\uB978 \uBD84\uC744 \uCC3E\uC544\uBCF4\uC138\uC694."), !isSearching && Object.keys(groups).length > 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#B0ABA0", marginBottom: 10 } }, "\uB0B4 \uD300 \uD300\uC7A5\uB2D8\uACFC \uC18C\uC18D \uBCF8\uBD80 \uC784\uC6D0\uC744 \uBA3C\uC800 \uBCF4\uC5EC\uB4DC\uB824\uC694. \uB2E4\uB978 \uACB0\uC7AC\uC790\uB294 \uAC80\uC0C9\uD574\uBCF4\uC138\uC694."), Object.keys(groups).map((dept) => /* @__PURE__ */ React.createElement("div", { key: dept, style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#B0ABA0", marginBottom: 8 } }, dept), /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 14, border: "1px solid #E4E2DC", overflow: "hidden" } }, groups[dept].map((a, i) => {
+      const aQueue = waitingListFor(queue, a.id);
+      const totalWait = aQueue.reduce((s, q) => s + q.estMinutes, 0);
+      return /* @__PURE__ */ React.createElement("div", { key: a.id, onClick: () => setSelectedId(a.id), style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: i < groups[dept].length - 1 ? "1px solid #EFEDE7" : "none", cursor: "pointer", background: selectedId === a.id ? "#FDF3EA" : "transparent" } }, /* @__PURE__ */ React.createElement(Avatar, { name: a.name, size: 36, tone: "cream" }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: NAVY } }, a.name, " ", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, fontSize: 11.5, color: "#9A9689" } }, a.role)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#9A9689" } }, a.dept, a.status === "\uAC00\uB2A5" && aQueue.length > 0 && " \xB7 \uB300\uAE30 " + aQueue.length + "\uBA85 \xB7 \uC57D " + totalWait + "\uBD84", a.status === "\uAC00\uB2A5" && aQueue.length === 0 && " \xB7 \uB300\uAE30 \uC5C6\uC74C")), /* @__PURE__ */ React.createElement(StatusBadge, { status: a.status }), /* @__PURE__ */ React.createElement("div", { onClick: (e) => {
+        e.stopPropagation();
+        toggleFavorite(a.id);
+      }, style: { fontSize: 18, color: favorites.indexOf(a.id) !== -1 ? ORANGE : "#D3CFC4", padding: 4 } }, favorites.indexOf(a.id) !== -1 ? "\u2605" : "\u2606"));
+    })))), /* @__PURE__ */ React.createElement("button", { disabled: !selected, onClick: () => setStep("schedule"), style: Object.assign({}, primaryBtn, { opacity: selected ? 1 : 0.4, marginTop: 8 }) }, selected ? selected.name + " \uC120\uD0DD \uC644\uB8CC \u2192 \uC77C\uC815 \uD655\uC778" : "\uACB0\uC7AC\uC790\uB97C \uC120\uD0DD\uD558\uC138\uC694")));
+  }
+  if (step === "schedule" && selected) {
+    return /* @__PURE__ */ React.createElement("div", { style: pageStyle }, /* @__PURE__ */ React.createElement(TopBar, { title: "\uACB0\uC7AC\uC790 \uC77C\uC815 \uD655\uC778", onBack: () => setStep("select") }), /* @__PURE__ */ React.createElement("div", { style: bodyStyle }, /* @__PURE__ */ React.createElement("div", { style: profileCard }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12 } }, /* @__PURE__ */ React.createElement(Avatar, { name: selected.name, size: 46 }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, selected.name, " ", selected.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE" } }, selected.dept)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#fff", background: selected.status === "\uAC00\uB2A5" ? "rgba(62,142,90,0.35)" : selected.status === "\uC77C\uC2DC\uC911\uB2E8" ? "rgba(230,106,31,0.35)" : "rgba(196,72,58,0.35)", border: `1px solid ${selected.status === "\uAC00\uB2A5" ? GREEN : selected.status === "\uC77C\uC2DC\uC911\uB2E8" ? ORANGE : RED}`, padding: "5px 10px", borderRadius: 9 } }, selected.status === "\uAC00\uB2A5" ? "\uC9C0\uAE08 \uBCF4\uACE0\uAC00\uB2A5" : selected.status === "\uC77C\uC2DC\uC911\uB2E8" ? "\u{1F7E1} \uC77C\uC2DC\uC911\uB2E8" : "\u{1F534} \uBCF4\uACE0\uBD88\uAC00")), isFrozen && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, fontSize: 11.5, color: "#FFD9B8", background: "rgba(230,106,31,0.16)", border: "1px solid rgba(230,106,31,0.4)", borderRadius: 10, padding: "8px 10px" } }, "\u2744\uFE0F \uD604\uC7AC \uC77C\uC2DC\uC911\uB2E8 \uC0C1\uD0DC\uC608\uC694. \uB300\uAE30\uC2DC\uAC04\uC774 \uBA48\uCDB0\uC788\uACE0, \uC7AC\uAC1C\uB418\uBA74 \uB2E4\uC2DC \uD758\uB7EC\uAC11\uB2C8\uB2E4."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 16 } }, /* @__PURE__ */ React.createElement(MiniStat, { num: list.length, label: "\uD604\uC7AC \uB300\uAE30 \uC778\uC6D0" }), /* @__PURE__ */ React.createElement(MiniStat, { num: list.reduce((s, q) => s + q.estMinutes, 0) + "\uBD84", label: "\uB204\uC801 \uB300\uAE30\uC2DC\uAC04" }), /* @__PURE__ */ React.createElement(MiniStat, { num: todaySlots.length > 0 ? "\uAC00\uB2A5" : "\uBD88\uAC00", label: today ? "\uC624\uB298(" + today + ") \uC0C1\uD0DC" : "\uC624\uB298(\uD734\uC77C)" }))), /* @__PURE__ */ React.createElement(SectionTitle, null, "\uC774\uBC88 \uC8FC \uC77C\uC815"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, DAYS.map((d) => {
+      const slots = selected.weekly[d] || [];
+      const isToday = d === today;
+      return /* @__PURE__ */ React.createElement("div", { key: d, style: { background: isToday ? "#fff" : "#F7F5F0", border: isToday ? `1.5px solid ${NAVY2}` : "1px solid #E4E2DC", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 36, height: 36, borderRadius: 10, background: isToday ? `linear-gradient(135deg, ${NAVY2}, ${NAVY})` : "#E2DED4", color: isToday ? "#fff" : NAVY, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13 } }, d), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: NAVY } }, d, "\uC694\uC77C ", isToday && "\xB7 \uC624\uB298"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#9A9689" } }, slots.length === 0 ? "\uBCF4\uACE0 \uBD88\uAC00" : slots.join(" \xB7 ") + " \uBCF4\uACE0 \uAC00\uB2A5")), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "4px 9px", borderRadius: 8, background: slots.length ? "#EAF4EE" : "#F0EDE4", color: slots.length ? "#2E7048" : "#A6A192" } }, slots.length ? "\uAC00\uB2A5" : "\uBD88\uAC00"));
+    })), /* @__PURE__ */ React.createElement("button", { onClick: () => setStep("form"), style: Object.assign({}, primaryBtn, { marginTop: 20 }) }, "\uC774 \uACB0\uC7AC\uC790\uC5D0\uAC8C \uBCF4\uACE0 \uB4F1\uB85D\uD558\uAE30")));
+  }
+  if (step === "form" && selected) {
+    const currentList = waitingListFor(queue, selected.id);
+    const previewOrder = currentList.length + 1;
+    const rawPreviewWait = currentList.reduce((s, q) => s + q.estMinutes, 0);
+    const correction = getApproverCorrection(history, selected.id);
+    const previewWait = Math.round(rawPreviewWait * correction.factor);
+    return /* @__PURE__ */ React.createElement("div", { style: pageStyle }, /* @__PURE__ */ React.createElement(TopBar, { title: "\uBCF4\uACE0 \uC815\uBCF4 \uC785\uB825", onBack: () => setStep("schedule") }), /* @__PURE__ */ React.createElement("div", { style: bodyStyle }, /* @__PURE__ */ React.createElement("div", { style: targetCard }, /* @__PURE__ */ React.createElement(Avatar, { name: selected.name, size: 44 }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15.5, fontWeight: 700, color: "#fff" } }, selected.name, " ", selected.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE" } }, selected.dept, " \xB7 \uD604\uC7AC \uB300\uAE30 ", currentList.length, "\uBA85"))), /* @__PURE__ */ React.createElement(FieldLabel, null, "\uBCF4\uACE0 \uB0B4\uC6A9 *"), /* @__PURE__ */ React.createElement("textarea", { value: content, onChange: (e) => setContent(e.target.value.slice(0, 100)), placeholder: "\uC608: \uC2E0\uADDC \uD30C\uD2B8\uB108\uC2ED \uC81C\uC548 \uAC80\uD1A0 \uACB0\uACFC \uACF5\uC720", style: textareaStyle }), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", fontSize: 10.5, color: "#B0ABA0", marginBottom: 20 } }, content.length, " / 100\uC790"), /* @__PURE__ */ React.createElement(FieldLabel, null, "\uC608\uC0C1 \uBCF4\uACE0 \uC2DC\uAC04 *"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 } }, [5, 10, 15, 20].map((m) => /* @__PURE__ */ React.createElement("button", { key: m, onClick: () => setEstMinutes(m), style: Object.assign({}, pillBtn, estMinutes === m ? pillBtnActive : {}) }, m, "\uBD84"))), /* @__PURE__ */ React.createElement(FieldLabel, null, "\uAE34\uAE09\uB3C4"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setUrgent(false), style: Object.assign({}, urgencyBtn, !urgent ? urgencyNormalActive : {}) }, "\u{1F535} \uC77C\uBC18 \uBCF4\uACE0"), /* @__PURE__ */ React.createElement("button", { onClick: () => setUrgent(true), style: Object.assign({}, urgencyBtn, urgent ? urgencyUrgentActive : {}) }, "\u{1F7E0} \uAE34\uAE09 \uBCF4\uACE0")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#B0ABA0", marginBottom: 20 } }, "\uAE34\uAE09 \uBCF4\uACE0\uB294 \uACB0\uC7AC\uC790\uAC00 \uC6B0\uC120 \uD638\uCD9C\uD560 \uC218 \uC788\uC5B4\uC694. \uC0C8\uCE58\uAE30 \uBC29\uC9C0\uB97C \uC704\uD574 \uACB0\uC7AC\uC790\uB9CC \uC6B0\uC120\uC21C\uC704\uB97C \uC870\uC815\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."), /* @__PURE__ */ React.createElement("div", { style: previewCard }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "#9A9689", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", null, "\uB300\uAE30 \uB4F1\uB85D \uBBF8\uB9AC\uBCF4\uAE30"), correction.ready && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9.5, fontWeight: 700, color: NAVY2, background: "#EDF3F8", padding: "2px 7px", borderRadius: 7 } }, "\u2728 AI \uBCF4\uC815 \uC801\uC6A9")), /* @__PURE__ */ React.createElement(PreviewRow, { k: "\uD604\uC7AC \uB300\uAE30 \uC21C\uBC88", v: previewOrder + "\uBC88\uC9F8" }), /* @__PURE__ */ React.createElement(PreviewRow, { k: "\uC608\uC0C1 \uB300\uAE30 \uC2DC\uAC04", v: "\uC57D " + previewWait + "\uBD84", orange: true }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#B0ABA0", marginTop: 8 } }, correction.ready ? `${selected.name} ${selected.role}\uB2D8\uC758 \uCD5C\uADFC \uBCF4\uACE0 ${correction.sampleSize}\uAC74 \uAE30\uC900\uC73C\uB85C \uBCF4\uC815\uD588\uC5B4\uC694 (${formatFactorLabel(correction.factor)}).` : "\uC544\uC9C1 \uB370\uC774\uD130\uAC00 \uC801\uC5B4 \uC785\uB825\uD558\uC2E0 \uC608\uC0C1 \uC2DC\uAC04\uC744 \uADF8\uB300\uB85C \uBC18\uC601\uD588\uC5B4\uC694 (3\uAC74 \uC774\uC0C1 \uC313\uC774\uBA74 AI \uBCF4\uC815\uC774 \uC2DC\uC791\uB3FC\uC694).")), /* @__PURE__ */ React.createElement("button", { disabled: !content.trim(), onClick: submit, style: Object.assign({}, primaryBtn, { opacity: content.trim() ? 1 : 0.4 }) }, "\uC6E8\uC774\uD305 \uC2DC\uC791\uD558\uAE30")));
+  }
+  if (step === "waiting" && selected) {
+    const myTicket = queue.find((q) => q.id === myTicketId);
+    const pos = list.findIndex((q) => q.id === myTicketId);
+    const rawWaitMin = pos >= 0 ? list.slice(0, pos).reduce((s, q) => s + q.estMinutes, 0) : 0;
+    const waitCorrection = getApproverCorrection(history, selected.id);
+    const waitMin = Math.round(rawWaitMin * waitCorrection.factor);
+    const wasCalled = myTicket && myTicket.status === "called";
+    const inProgress = myTicket && myTicket.status === "in_progress";
+    const remainSec = wasCalled && myTicket.calledAt ? Math.max(0, Math.ceil((CALL_TIMEOUT_MS - (Date.now() - myTicket.calledAt)) / 1e3)) : null;
+    return /* @__PURE__ */ React.createElement("div", { style: pageStyle }, /* @__PURE__ */ React.createElement("div", { style: headerBand }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: ORANGE, fontWeight: 700, letterSpacing: 1 } }, "\uB300\uAE30 \uC911 \xB7 ", me.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: "#fff", marginTop: 4 } }, selected.name, " ", selected.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#C9D3DE", marginTop: 2 } }, selected.dept, " \xB7 ", pos + 1, "\uBC88\uC9F8 \uACB0\uC7AC \uC21C\uC11C"), inProgress ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, fontSize: 20, fontWeight: 700, color: GREEN } }, "\u2713 \uBCF4\uACE0 \uC9C4\uD589 \uC911\uC785\uB2C8\uB2E4") : isFrozen ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 18, display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40 } }, "\u2744\uFE0F"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#FFD9B8" } }, "\uB300\uAE30\uC2DC\uAC04 \uC77C\uC2DC\uC815\uC9C0"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE" } }, "\uACB0\uC7AC\uC790\uAC00 \uC7AC\uAC1C\uD558\uBA74 \uB2E4\uC2DC \uCE74\uC6B4\uD2B8\uB429\uB2C8\uB2E4"))) : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: 10, marginTop: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 56, fontWeight: 700, color: "#fff", lineHeight: 0.9 } }, waitMin), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#fff", paddingBottom: 8 } }, "\uBD84 \uC608\uC0C1 \uB300\uAE30"), waitCorrection.ready && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9.5, fontWeight: 700, color: "#fff", background: "rgba(230,106,31,0.3)", border: "1px solid rgba(230,106,31,0.5)", padding: "3px 8px", borderRadius: 7, marginBottom: 8 } }, "\u2728 AI \uBCF4\uC815")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#C9D3DE", marginTop: 4 } }, waitCorrection.ready ? `${selected.name}\uB2D8 \uCD5C\uADFC ${waitCorrection.sampleSize}\uAC74 \uAE30\uC900 (${formatFactorLabel(waitCorrection.factor)})` : "\uB370\uC774\uD130 \uCD95\uC801 \uC911 \xB7 \uC785\uB825\uB41C \uC608\uC0C1 \uC2DC\uAC04 \uAE30\uC900")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 14 } }, /* @__PURE__ */ React.createElement(Chip, null, "\uD604\uC7AC \uC21C\uBC88 ", pos + 1, "/", list.length))), /* @__PURE__ */ React.createElement("div", { style: bodyStyle }, /* @__PURE__ */ React.createElement(SectionTitle, null, "\uB300\uAE30 \uC21C\uC11C"), /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 16, border: "1px solid #E4E2DC", overflow: "hidden", marginBottom: 20 } }, list.map((q, i) => {
+      const isPriorityCalled = q.status === "called" && q.calledVia === "priority";
+      return /* @__PURE__ */ React.createElement("div", { key: q.id, style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < list.length - 1 ? "1px solid #EFEDE7" : "none", background: isPriorityCalled ? "#FDF3EA" : q.id === myTicketId ? "#FDF3EA" : "transparent" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 26, height: 26, borderRadius: 8, background: q.id === myTicketId ? ORANGE : "#F0EDE4", color: q.id === myTicketId ? "#fff" : "#9A9689", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 } }, i + 1), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#A6A192", display: "flex", alignItems: "center", gap: 5 } }, /* @__PURE__ */ React.createElement("span", null, q.reporterName, " ", q.id === myTicketId && "(\uB098)"), isPriorityCalled && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9.5, fontWeight: 700, color: "#fff", background: ORANGE, padding: "1px 6px", borderRadius: 6 } }, "\u26A1 \uC6B0\uC120PASS \uD638\uCD9C\uB428")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, fontWeight: 600, color: NAVY, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, q.content)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#A6A192" } }, "~", q.estMinutes, "\uBD84"));
+    })), wasCalled && !inProgress && /* @__PURE__ */ React.createElement("div", { style: Object.assign({}, cardStyle, { marginBottom: 14, borderColor: ORANGE, borderWidth: 1.5 }) }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: ORANGE_DEEP, marginBottom: 4 } }, "\u{1F514} \uACB0\uC7AC\uC790\uAC00 \uC9C0\uAE08 \uD638\uCD9C\uD588\uC2B5\uB2C8\uB2E4!"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#8D8A7E", marginBottom: 10 } }, remainSec !== null && "\uB0A8\uC740 \uC2DC\uAC04 " + Math.floor(remainSec / 60) + "\uBD84 " + remainSec % 60 + "\uCD08 \xB7 ", "\uC751\uB2F5\uD558\uC9C0 \uC54A\uC73C\uBA74 \uC21C\uC11C\uAC00 2\uBC88\uC9F8\uB85C \uBC00\uB824\uC694."), /* @__PURE__ */ React.createElement("button", { onClick: confirmGoingNow, style: primaryBtn }, "\uC9C0\uAE08 \uAC00\uACA0\uC2B5\uB2C8\uB2E4")), !wasCalled && !inProgress && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("button", { onClick: pushBackOrder, style: ghostBtn }, "\uB0B4 \uC21C\uC11C \uBBF8\uB8E8\uAE30"), /* @__PURE__ */ React.createElement("button", { onClick: cancelTicket, style: Object.assign({}, ghostBtn, { color: RED, borderColor: "#F0D0CB" }) }, "\uB300\uAE30 \uCDE8\uC18C")), inProgress && /* @__PURE__ */ React.createElement("button", { onClick: finishTicketWithHistory, style: primaryBtn }, "\uBCF4\uACE0 \uC644\uB8CC \xB7 \uB300\uAE30\uC5F4\uC5D0\uC11C \uB098\uAC00\uAE30")));
+  }
+  return null;
+}
+function ApproverFlow({ people, queue, savePeople, saveQueue, history, saveHistory, me }) {
+  const [tab, setTab] = useState("queue");
+  const myQueue = waitingListFor(queue, me.id);
+  const setStatus = async (status) => {
+    const person = people.find((p) => p.id === me.id);
+    let freezeStartedAt = person.freezeStartedAt;
+    if (status === "\uC77C\uC2DC\uC911\uB2E8" && person.status !== "\uC77C\uC2DC\uC911\uB2E8") {
+      freezeStartedAt = Date.now();
+    } else if (status !== "\uC77C\uC2DC\uC911\uB2E8" && person.status === "\uC77C\uC2DC\uC911\uB2E8") {
+      freezeStartedAt = null;
+    }
+    const next = people.map((a) => a.id === me.id ? Object.assign({}, a, { status, freezeStartedAt }) : a);
+    await savePeople(next);
+  };
+  const callTicket = async (ticketId) => {
+    const next = queue.map((q) => q.id === ticketId ? Object.assign({}, q, { status: "called", calledAt: Date.now(), calledVia: "normal" }) : q);
+    await saveQueue(next);
+  };
+  const priorityCall = async (ticketId) => {
+    const list = waitingListFor(queue, me.id);
+    const target = list.find((q) => q.id === ticketId);
+    if (!target) return;
+    const minOrder = Math.min.apply(null, list.map((q) => q.order));
+    const noticeTag = target.reporterName + "_priority_" + Date.now();
+    const next = queue.map((q) => {
+      if (q.id === ticketId) return Object.assign({}, q, { order: minOrder - 1, status: "called", calledAt: Date.now(), calledVia: "priority", urgent: true });
+      if (q.approverId === me.id && q.status === "waiting") return Object.assign({}, q, { pushedNotice: noticeTag });
+      return q;
+    });
+    await saveQueue(next);
+  };
+  const pushBack = async (ticketId) => {
+    const maxOrder = Math.max.apply(null, myQueue.map((q) => q.order));
+    const next = queue.map((q) => q.id === ticketId ? Object.assign({}, q, { order: maxOrder + 1 }) : q);
+    await saveQueue(next);
+  };
+  const finishTicket = async (ticketId) => {
+    const target = queue.find((q) => q.id === ticketId);
+    if (target && target.startedAt) {
+      const actualMinutes = Math.max(1, Math.round((Date.now() - target.startedAt) / 6e4));
+      const entry = {
+        id: uid("hist"),
+        approverId: target.approverId,
+        reporterId: target.reporterId,
+        estMinutes: target.estMinutes,
+        actualMinutes,
+        ts: Date.now()
+      };
+      await saveHistory(history.concat([entry]));
+    }
+    const next = queue.filter((q) => q.id !== ticketId);
+    await saveQueue(next);
+  };
+  const toggleSlot = async (day, slot) => {
+    const person = people.find((p) => p.id === me.id);
+    const current = person.weekly[day] || [];
+    const nextSlots = current.indexOf(slot) !== -1 ? current.filter((s) => s !== slot) : current.concat([slot]);
+    const next = people.map((a) => a.id === me.id ? Object.assign({}, a, { weekly: Object.assign({}, a.weekly, { [day]: nextSlots }) }) : a);
+    await savePeople(next);
+  };
+  const me2 = people.find((p) => p.id === me.id);
+  if (!me2) return null;
+  const isFrozen = me2.status === "\uC77C\uC2DC\uC911\uB2E8";
+  const myCorrection = getApproverCorrection(history, me.id);
+  return /* @__PURE__ */ React.createElement("div", { style: pageStyle }, /* @__PURE__ */ React.createElement("div", { style: headerBand }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 4 } }, /* @__PURE__ */ React.createElement(Avatar, { name: me2.name, size: 40 }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, me2.name, " ", me2.role), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE" } }, me2.dept))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 14 } }, ["\uBD88\uAC00", "\uC77C\uC2DC\uC911\uB2E8", "\uAC00\uB2A5"].map((s) => /* @__PURE__ */ React.createElement("button", { key: s, onClick: () => setStatus(s), style: Object.assign({}, statusToggleBtn, me2.status === s ? statusToggleActive(s) : {}) }, s === "\uBD88\uAC00" ? "\u{1F534}" : s === "\uC77C\uC2DC\uC911\uB2E8" ? "\u{1F7E1}" : "\u{1F7E2}", " ", s))), isFrozen && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, fontSize: 11, color: "#FFD9B8" } }, "\u2744\uFE0F \uC77C\uC2DC\uC911\uB2E8 \uC911 \u2014 \uB300\uAE30 \uC911\uC778 \uBCF4\uACE0\uC790\uB4E4\uC758 \uC2DC\uAC04\uC774 \uBA48\uCDB0 \uC788\uC5B4\uC694."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 16 } }, /* @__PURE__ */ React.createElement(MiniStat, { num: myQueue.length, label: "\uC624\uB298 \uB300\uAE30 \uC911" }), /* @__PURE__ */ React.createElement(MiniStat, { num: myQueue.reduce((s, q) => s + q.estMinutes, 0), label: "\uB204\uC801 \uB300\uAE30(\uBD84)" }), /* @__PURE__ */ React.createElement(MiniStat, { num: myQueue.filter((q) => q.urgent).length, label: "\uAE34\uAE09 \uBCF4\uACE0" })), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, fontSize: 10.5, color: "rgba(255,255,255,0.75)" } }, myCorrection.ready ? `\u2728 AI \uD559\uC2B5 \uC644\uB8CC \u2014 \uCD5C\uADFC ${myCorrection.sampleSize}\uAC74 \uAE30\uC900 ${formatFactorLabel(myCorrection.factor)}, \uBCF4\uACE0\uC790 \uD654\uBA74\uC5D0 \uC790\uB3D9 \uBC18\uC601 \uC911` : `AI \uBCF4\uC815 \uD559\uC2B5 \uC911 (\uC644\uB8CC \uC774\uB825 ${myCorrection.sampleSize}/3\uAC74) \u2014 3\uAC74\uBD80\uD130 \uC815\uBC00 \uB300\uAE30\uC2DC\uAC04\uC774 \uC801\uC6A9\uB3FC\uC694`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", background: "#fff", borderBottom: "1px solid #E4E2DC" } }, [{ k: "queue", label: "\uB300\uAE30 \uBAA9\uB85D" }, { k: "schedule", label: "\uC8FC\uAC04 \uC77C\uC815" }].map((t) => /* @__PURE__ */ React.createElement("div", { key: t.k, onClick: () => setTab(t.k), style: { flex: 1, textAlign: "center", padding: "12px 0", fontSize: 13, fontWeight: 700, color: tab === t.k ? ORANGE_DEEP : "#9A9689", borderBottom: tab === t.k ? `2px solid ${ORANGE}` : "2px solid transparent", cursor: "pointer" } }, t.label))), /* @__PURE__ */ React.createElement("div", { style: bodyStyle }, tab === "queue" && /* @__PURE__ */ React.createElement("div", null, myQueue.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#B0ABA0", fontSize: 13 } }, "\uD604\uC7AC \uB300\uAE30 \uC911\uC778 \uBCF4\uACE0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."), myQueue.map((q, i) => {
+    const isTop = i === 0;
+    const isCalled = q.status === "called";
+    const isPriorityCalled = isCalled && q.calledVia === "priority";
+    return /* @__PURE__ */ React.createElement("div", { key: q.id, style: { background: "#fff", borderRadius: 16, border: `1.5px solid ${isPriorityCalled ? ORANGE : isTop ? GREEN : "#E4E2DC"}`, padding: "14px 16px", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 24, height: 24, borderRadius: 7, background: isTop ? GREEN : "#F0EDE4", color: isTop ? "#fff" : "#9A9689", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12 } }, i + 1), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#A6A192" } }, q.reporterName, " ", q.urgent && !isPriorityCalled && "\u{1F7E0}\uAE34\uAE09")), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: isPriorityCalled ? "#fff" : ORANGE_DEEP, background: isPriorityCalled ? ORANGE : "#FDF3EA", padding: "4px 8px", borderRadius: 8 } }, isPriorityCalled ? "\u26A1 \uC6B0\uC120PASS \uD638\uCD9C\uB428" : isCalled ? "\uD638\uCD9C\uB428" : "\uB300\uAE30\uC911")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#5C5748", marginTop: 8 } }, q.content), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#A6A192", marginTop: 6 } }, "\uC608\uC0C1 \uC18C\uC694 ", q.estMinutes, "\uBD84"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } }, !isCalled && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => callTicket(q.id), style: callBtn }, "\uC9C0\uAE08 \uC785\uC7A5\uD558\uC138\uC694"), !isTop && /* @__PURE__ */ React.createElement("button", { onClick: () => priorityCall(q.id), style: priorityBtn }, "\uC6B0\uC120 \uD638\uCD9C"), /* @__PURE__ */ React.createElement("button", { onClick: () => pushBack(q.id), style: skipBtn }, "\uB4A4\uB85C \uBBF8\uB8E8\uAE30")), isCalled && /* @__PURE__ */ React.createElement("button", { onClick: () => finishTicket(q.id), style: callBtn }, "\uBCF4\uACE0 \uC644\uB8CC \uCC98\uB9AC")));
+  })), tab === "schedule" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionTitle, null, "\uC694\uC77C\uBCC4 \uBCF4\uACE0 \uAC00\uB2A5 \uC2DC\uAC04"), DAYS.map((d) => {
+    const slots = me2.weekly[d] || [];
+    return /* @__PURE__ */ React.createElement("div", { key: d, style: { background: "#fff", borderRadius: 14, border: "1px solid #E4E2DC", padding: "12px 14px", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 34, height: 34, borderRadius: 10, background: "#E2DED4", color: NAVY, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12 } }, d), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, fontWeight: 700, color: NAVY } }, d, "\uC694\uC77C")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, ["\uC624\uC804", "\uC624\uD6C4"].map((slot) => /* @__PURE__ */ React.createElement("button", { key: slot, onClick: () => toggleSlot(d, slot), style: Object.assign({}, slotBtn, slots.indexOf(slot) !== -1 ? slotBtnActive : {}) }, slot))));
+  }))));
+}
+const pageStyle = { minHeight: "100%", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans KR', -apple-system, sans-serif" };
+const headerBand = { background: `radial-gradient(120% 100% at 100% 0%, rgba(0,61,130,0.55) 0%, transparent 55%), linear-gradient(155deg, ${NAVY2} 0%, ${NAVY} 48%, ${NAVY_DEEP} 100%)`, padding: "18px 20px 22px" };
+const bodyStyle = { padding: "18px 20px 28px", background: CREAM, flex: 1 };
+const searchInput = { marginTop: 14, width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.22)", borderRadius: 12, padding: "12px 14px", color: "#fff", fontSize: 13, outline: "none" };
+const inputStyle = { width: "100%", boxSizing: "border-box", background: "#F7F5F0", border: "1px solid #E4E2DC", borderRadius: 10, padding: "11px 12px", fontSize: 13, color: NAVY, outline: "none" };
+const primaryBtn = { width: "100%", padding: "15px 0", borderRadius: 14, background: `linear-gradient(135deg, ${NAVY2} 0%, ${NAVY} 100%)`, color: "#fff", fontSize: 14.5, fontWeight: 700, border: "none", cursor: "pointer", boxShadow: "0 10px 20px rgba(0,61,130,0.25)" };
+const ghostBtn = { flex: 1, padding: "13px 0", borderRadius: 12, background: "#fff", border: "1px solid #E4E2DC", color: "#8D8A7E", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const cardStyle = { background: "#fff", borderRadius: 16, border: "1px solid #E4E2DC", padding: 16 };
+const profileCard = { background: `radial-gradient(120% 100% at 100% 0%, rgba(0,61,130,0.55) 0%, transparent 55%), linear-gradient(155deg, ${NAVY2} 0%, ${NAVY} 60%, ${NAVY_DEEP} 100%)`, borderRadius: 18, padding: "18px", marginBottom: 18 };
+const targetCard = { background: `linear-gradient(155deg, ${NAVY2} 0%, ${NAVY} 60%, ${NAVY_DEEP} 100%)`, borderRadius: 18, padding: "16px 18px", display: "flex", alignItems: "center", gap: 12, marginBottom: 22 };
+const textareaStyle = { width: "100%", boxSizing: "border-box", background: "#fff", border: "1px solid #E4E2DC", borderRadius: 14, padding: "14px 16px", fontSize: 13.5, color: NAVY, lineHeight: 1.6, minHeight: 80, fontFamily: "inherit", resize: "vertical", outline: "none" };
+const pillBtn = { padding: "11px 16px", borderRadius: 11, background: "#fff", border: "1.5px solid #E4E2DC", fontSize: 13, fontWeight: 600, color: "#5C5748", cursor: "pointer" };
+const pillBtnActive = { background: `linear-gradient(135deg, ${NAVY2}, ${NAVY})`, borderColor: NAVY2, color: "#fff" };
+const urgencyBtn = { flex: 1, textAlign: "center", padding: "13px 0", borderRadius: 12, background: "#fff", border: "1.5px solid #E4E2DC", fontSize: 12.5, fontWeight: 700, color: "#8D8A7E", cursor: "pointer" };
+const urgencyNormalActive = { background: "#EDF3F8", borderColor: NAVY2, color: NAVY2 };
+const urgencyUrgentActive = { background: `linear-gradient(135deg, ${ORANGE} 0%, ${ORANGE_DEEP} 100%)`, borderColor: ORANGE, color: "#fff" };
+const previewCard = { background: "#fff", border: "1px solid #E4E2DC", borderRadius: 16, padding: 16, marginBottom: 20 };
+const statusToggleBtn = { flex: 1, padding: "11px 0", borderRadius: 11, background: "transparent", border: "1.5px solid rgba(255,255,255,0.22)", color: "rgba(255,255,255,0.7)", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+function statusToggleActive(s) {
+  const c = s === "\uAC00\uB2A5" ? GREEN : s === "\uC77C\uC2DC\uC911\uB2E8" ? ORANGE : RED;
+  return { background: c, borderColor: c, color: "#fff" };
+}
+const callBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${NAVY2}, ${NAVY})`, color: "#fff", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" };
+const priorityBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${ORANGE}, ${ORANGE_DEEP})`, color: "#fff", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" };
+const skipBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#fff", border: "1px solid #E4E2DC", color: "#8D8A7E", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const slotBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#fff", border: "1.5px solid #E4E2DC", fontSize: 12, fontWeight: 700, color: "#8D8A7E", cursor: "pointer" };
+const slotBtnActive = { background: "#EAF4EE", borderColor: GREEN, color: "#2E7048" };
+function App() {
+  const { ready, people, queue, history, savePeople, saveQueue, saveHistory } = useStorage();
+  const [me, setMe] = useState(null);
+  const [role, setRole] = useState("reporter");
+  const [toast, setToast] = useState(null);
+  const seenPushNotices = useRef({});
+  const toastTimerRef = useRef(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("me", false);
+        if (r) setMe(JSON.parse(r.value));
+      } catch (e) {
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!ready || !me || me.isGuest) return;
+    if (people.length > 0 && !people.find((p) => p.id === me.id)) {
+      setMe(null);
+      window.storage.delete("me", false).catch(() => {
+      });
+    }
+  }, [ready, people, me]);
+  const pushToast = useCallback((t) => {
+    setToast(t);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 5e3);
+  }, []);
+  useEffect(() => {
+    if (!me) return;
+    const NOTICE_FRESH_MS = 15e3;
+    queue.forEach((q) => {
+      if (q.reporterId !== me.id) return;
+      if (q.pushedNotice && !seenPushNotices.current[q.pushedNotice]) {
+        seenPushNotices.current[q.pushedNotice] = true;
+        const parts = q.pushedNotice.split("_priority_");
+        const name = parts[0];
+        const ts = Number(parts[1]) || 0;
+        if (Date.now() - ts < NOTICE_FRESH_MS) {
+          pushToast({ title: "\u{1F4E3} " + name + "\uB2D8 \uC6B0\uC120PASS\uB85C \uC21C\uC11C\uAC00 \uBC00\uB838\uC2B5\uB2C8\uB2E4", desc: "\uAE34\uAE09 \uBCF4\uACE0\uAC00 \uBA3C\uC800 \uCC98\uB9AC\uB429\uB2C8\uB2E4." });
+        }
+      }
+      if (q.orderSwapNotice && !seenPushNotices.current[q.orderSwapNotice]) {
+        seenPushNotices.current[q.orderSwapNotice] = true;
+        const parts = q.orderSwapNotice.split("_swap_");
+        const name = parts[0];
+        const ts = Number(parts[1]) || 0;
+        if (Date.now() - ts < NOTICE_FRESH_MS) {
+          pushToast({ title: "\u{1F504} " + name + "\uB2D8\uC774 \uC21C\uC11C\uB97C \uC591\uBCF4\uD574 \uC21C\uBC88\uC774 \uC55E\uB2F9\uACA8\uC84C\uC5B4\uC694", desc: "\uAE34\uAE09 \uC0C1\uD669\uC740 \uC544\uB2C8\uC5D0\uC694, \uC790\uB9AC\uB9CC \uD55C \uCE78 \uBC14\uB00C\uC5C8\uC2B5\uB2C8\uB2E4." });
+        }
+      }
+    });
+  }, [queue, me, pushToast]);
+  const queueRef = useRef(queue);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+  const meRef = useRef(me);
+  useEffect(() => {
+    meRef.current = me;
+  }, [me]);
+  useEffect(() => {
+    if (!ready) return;
+    const timer = setInterval(async () => {
+      const currentQueue = queueRef.current;
+      const expired = currentQueue.filter((q) => q.status === "called" && q.calledAt && Date.now() - q.calledAt > CALL_TIMEOUT_MS);
+      if (expired.length === 0) return;
+      let next = currentQueue;
+      for (const exp of expired) {
+        const list = waitingListFor(next, exp.approverId).filter((q) => q.id !== exp.id);
+        const secondOrder = list.length >= 2 ? (list[0].order + list[1].order) / 2 : list.length === 1 ? list[0].order + 0.5 : exp.order;
+        next = next.map((q) => q.id === exp.id ? Object.assign({}, q, { status: "waiting", calledAt: null, calledVia: null, urgent: false, order: secondOrder }) : q);
+        const currentMe = meRef.current;
+        if (currentMe && exp.reporterId === currentMe.id) {
+          pushToast({ title: "\u23F1\uFE0F \uC751\uB2F5 \uC2DC\uAC04\uC774 \uC9C0\uB098 \uC21C\uC11C\uAC00 \uBC00\uB838\uC5B4\uC694", desc: "\uB300\uAE30 \uC21C\uC11C 2\uBC88\uC9F8\uB85C \uC774\uB3D9\uD588\uC2B5\uB2C8\uB2E4." });
+        }
+      }
+      await saveQueue(next);
+    }, 3e3);
+    return () => clearInterval(timer);
+  }, [ready, saveQueue]);
+  const login = async (person) => {
+    setMe(person);
+    try {
+      await window.storage.set("me", JSON.stringify(person), false);
+    } catch (e) {
+    }
+    setRole("reporter");
+  };
+  const logout = async () => {
+    setMe(null);
+    try {
+      await window.storage.delete("me", false);
+    } catch (e) {
+    }
+  };
+  const resetDemo = async () => {
+    if (!window.confirm("\uB370\uBAA8 \uB370\uC774\uD130\uB97C \uCD08\uAE30 \uC0C1\uD0DC\uB85C \uB418\uB3CC\uB9B4\uAE4C\uC694? (\uB0B4 \uB85C\uADF8\uC778 \uC815\uBCF4\uB294 \uC720\uC9C0\uB429\uB2C8\uB2E4)")) return;
+    localStorage.removeItem("bogopass_shared_people");
+    localStorage.removeItem("bogopass_shared_queue");
+    window.location.reload();
+  };
+  if (!ready) {
+    return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8F4EC", color: NAVY, fontSize: 13 } }, "\uBD88\uB7EC\uC624\uB294 \uC911...");
+  }
+  if (!me) {
+    return /* @__PURE__ */ React.createElement(LoginScreen, { people, onLogin: login });
+  }
+  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", justifyContent: "center", padding: "24px 12px" } }, /* @__PURE__ */ React.createElement(ToastBanner, { toast, onDismiss: () => setToast(null) }), /* @__PURE__ */ React.createElement("div", { style: { width: 400, maxWidth: "100%" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: "#8A8578" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("b", { style: { color: NAVY } }, me.name), " ", me.role, " \xB7 ", me.dept), /* @__PURE__ */ React.createElement("span", { onClick: logout, style: { cursor: "pointer", textDecoration: "underline" } }, "\uB2E4\uB978 \uC0AC\uB78C\uC73C\uB85C \uB85C\uADF8\uC778"), /* @__PURE__ */ React.createElement("span", { onClick: resetDemo, style: { cursor: "pointer", color: ORANGE_DEEP, fontWeight: 700 } }, "[\uCD08\uAE30\uD654]")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setRole("reporter"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: role === "reporter" ? ORANGE : "#fff", color: role === "reporter" ? "#fff" : NAVY, boxShadow: role === "reporter" ? "0 4px 12px rgba(230,106,31,0.28)" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uBCF4\uACE0\uC790 \uBAA8\uB4DC"), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      disabled: !me.canApprove,
+      onClick: () => setRole("approver"),
+      style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: me.canApprove ? "pointer" : "not-allowed", fontSize: 12.5, fontWeight: 700, background: role === "approver" ? ORANGE : "#fff", color: role === "approver" ? "#fff" : NAVY, boxShadow: role === "approver" ? "0 4px 12px rgba(230,106,31,0.28)" : "0 1px 3px rgba(10,38,71,0.12)", opacity: me.canApprove ? 1 : 0.4 }
+    },
+    "\uACB0\uC7AC\uC790 \uBAA8\uB4DC",
+    !me.canApprove && " \u{1F512}"
+  )), !me.canApprove && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10.5, color: "#8A8578", marginBottom: 10, textAlign: "center" } }, me.role, " \uC9C1\uAE09\uC740 \uACB0\uC7AC\uC790 \uBAA8\uB4DC\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC5B4\uC694 (\uACFC\uC7A5\uAE09 \uC774\uC0C1\uBD80\uD130 \uAC00\uB2A5)."), /* @__PURE__ */ React.createElement("div", { style: { borderRadius: 28, overflow: "hidden", boxShadow: "0 24px 48px rgba(10,38,71,0.22)", border: `6px solid ${NAVY_DEEP}` } }, role === "reporter" || !me.canApprove ? /* @__PURE__ */ React.createElement(ReporterFlow, { people, queue, saveQueue, history, saveHistory, me, pushToast }) : /* @__PURE__ */ React.createElement(ApproverFlow, { people, queue, savePeople, saveQueue, history, saveHistory, me })), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", fontSize: 10.5, color: "#A6A192", marginTop: 12 } }, "\uBCF4\uACE0PASS \uB370\uBAA8 \xB7 \uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0 \uB370\uC774\uD130\uAC00 \uC800\uC7A5\uB429\uB2C8\uB2E4 (\uAE30\uAE30\uBCC4 \uB3C5\uB9BD)")));
+}
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(/* @__PURE__ */ React.createElement(App, null));
+} catch (err) {
+  console.error("App render error:", err);
+  var el = document.getElementById('boot-error');
+  var m = document.getElementById('boot-error-msg');
+  var rootEl = document.getElementById('root');
+  if (rootEl) rootEl.style.display = 'none';
+  m.textContent = '앱 실행 중 오류가 발생했어요: ' + (err && err.message ? err.message : String(err)) + ' — 개발자 도구(F12)의 Console 탭에서 자세한 내용을 확인할 수 있어요.';
+  el.className = 'show';
+}
+</script>
+</body>
+</html>
