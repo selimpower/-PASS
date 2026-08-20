@@ -516,12 +516,17 @@ function useStorage() {
   const [people, setPeople] = useState([]);
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
+  const [initError, setInitError] = useState(null);
   const peopleRef = useRef([]);
   const queueRef = useRef([]);
   const historyRef = useRef([]);
   const loadPeople = useCallback(async () => {
     const { data, error } = await supabase.from("people").select("*");
-    if (!error && data) {
+    if (error) {
+      setInitError("people \uD14C\uC774\uBE14 \uC870\uD68C \uC2E4\uD328: " + error.message);
+      return;
+    }
+    if (data) {
       const mapped = data.map(rowToPerson);
       peopleRef.current = mapped;
       setPeople(mapped);
@@ -529,7 +534,11 @@ function useStorage() {
   }, []);
   const loadQueue = useCallback(async () => {
     const { data, error } = await supabase.from("queue").select("*");
-    if (!error && data) {
+    if (error) {
+      setInitError("queue \uD14C\uC774\uBE14 \uC870\uD68C \uC2E4\uD328: " + error.message);
+      return;
+    }
+    if (data) {
       const mapped = data.map(rowToTicket);
       queueRef.current = mapped;
       setQueue(mapped);
@@ -537,7 +546,11 @@ function useStorage() {
   }, []);
   const loadHistory = useCallback(async () => {
     const { data, error } = await supabase.from("history").select("*");
-    if (!error && data) {
+    if (error) {
+      setInitError("history \uD14C\uC774\uBE14 \uC870\uD68C \uC2E4\uD328: " + error.message);
+      return;
+    }
+    if (data) {
       const mapped = data.map(rowToHistory);
       historyRef.current = mapped;
       setHistory(mapped);
@@ -547,15 +560,21 @@ function useStorage() {
     let cancelled = false;
     (async () => {
       try {
-        const { count } = await supabase.from("people").select("*", { count: "exact", head: true });
+        if (!window.SUPABASE_URL || window.SUPABASE_URL.indexOf("YOUR-PROJECT-ID") !== -1) {
+          throw new Error("SUPABASE_URL\uC774 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC5B4\uC694. \uD30C\uC77C \uC0C1\uB2E8\uC758 SUPABASE_URL / SUPABASE_ANON_KEY \uAC12\uC744 \uBCF8\uC778 \uD504\uB85C\uC81D\uD2B8 \uAC12\uC73C\uB85C \uBC14\uAFD4\uC8FC\uC138\uC694.");
+        }
+        const { count, error: countError } = await supabase.from("people").select("*", { count: "exact", head: true });
+        if (countError) throw new Error("people \uD14C\uC774\uBE14 \uC811\uADFC \uC2E4\uD328: " + countError.message + " (RLS \uC815\uCC45 \uB610\uB294 \uD14C\uC774\uBE14 \uC0DD\uC131 \uC5EC\uBD80\uB97C \uD655\uC778\uD574\uC8FC\uC138\uC694)");
         if (!count || count === 0) {
-          await supabase.from("people").upsert(SEED_PEOPLE.map(personToRow));
+          const { error: seedError } = await supabase.from("people").upsert(SEED_PEOPLE.map(personToRow));
+          if (seedError) throw new Error("\uC870\uC9C1\uB3C4 \uCD08\uAE30 \uB370\uC774\uD130 \uC0BD\uC785 \uC2E4\uD328: " + seedError.message + " (insert \uAD8C\uD55C \uC815\uCC45\uC744 \uD655\uC778\uD574\uC8FC\uC138\uC694)");
         }
         await Promise.all([loadPeople(), loadQueue(), loadHistory()]);
         if (!cancelled) setReady(true);
       } catch (e) {
         console.error("supabase init error", e);
         if (!cancelled) {
+          setInitError(e && e.message ? e.message : String(e));
           setPeople(SEED_PEOPLE);
           setReady(true);
         }
@@ -624,7 +643,7 @@ function useStorage() {
     await supabase.from("people").upsert(SEED_PEOPLE.map(personToRow));
     await Promise.all([loadPeople(), loadQueue(), loadHistory()]);
   }, [loadPeople, loadQueue, loadHistory]);
-  return { ready, people, queue, history, savePeople, saveQueue, saveHistory, resetDemoData };
+  return { ready, people, queue, history, initError, savePeople, saveQueue, saveHistory, resetDemoData };
 }
 const MIN_HISTORY_SAMPLE = 3;
 const MAX_HISTORY_PER_APPROVER = 30;
@@ -712,7 +731,7 @@ function ToastBanner({ toast, onDismiss }) {
     toast.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11.5, color: "#C9D3DE", marginTop: 3 } }, toast.desc)
   );
 }
-function LoginScreen({ people, onLogin }) {
+function LoginScreen({ people, onLogin, errorBanner }) {
   const [mode, setMode] = useState("pick");
   const [selectedId, setSelectedId] = useState("");
   const [pickSearch, setPickSearch] = useState("");
@@ -730,7 +749,7 @@ function LoginScreen({ people, onLogin }) {
     onLogin({ id: uid("guest"), name: name.trim(), role, dept: dept.trim(), division: null, canApprove, isGuest: true });
   };
   const pickFiltered = pickSearch.trim() ? people.filter((p) => p.name.indexOf(pickSearch) !== -1 || p.dept.indexOf(pickSearch) !== -1 || p.division && p.division.indexOf(pickSearch) !== -1) : people;
-  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 380, maxWidth: "100%" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginBottom: 22 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: NAVY } }, "\uBCF4\uACE0", /* @__PURE__ */ React.createElement("span", { style: { color: ORANGE } }, "PASS")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: "#8A8578", marginTop: 6 } }, "\uC2DC\uC791\uD558\uAE30 \uC804\uC5D0 \uBCF8\uC778 \uC815\uBCF4\uB97C \uC785\uB825\uD574\uC8FC\uC138\uC694")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("pick"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "pick" ? ORANGE : "#fff", color: mode === "pick" ? "#fff" : NAVY, boxShadow: mode === "pick" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC870\uC9C1\uB3C4\uC5D0\uC11C \uC120\uD0DD"), /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("manual"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "manual" ? ORANGE : "#fff", color: mode === "manual" ? "#fff" : NAVY, boxShadow: mode === "manual" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC9C1\uC811 \uC785\uB825")), mode === "pick" && /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 16, padding: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9A9689", marginBottom: 10 } }, "\uC774\uB984, \uD300, \uBCF8\uBD80\uB85C \uAC80\uC0C9\uD574\uC11C \uBCF8\uC778\uC744 \uCC3E\uC73C\uC138\uC694"), /* @__PURE__ */ React.createElement("input", { value: pickSearch, onChange: (e) => setPickSearch(e.target.value), placeholder: "\uC608: \uAE40\uC138\uB9BC, \uAC74\uCD95\uC608\uC0B0\uD300, \uAC74\uCD95\uBCF8\uBD80", style: Object.assign({}, inputStyle, { marginBottom: 12 }) }), /* @__PURE__ */ React.createElement("div", { style: { maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } }, pickFiltered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "24px 0", color: "#B0ABA0", fontSize: 12 } }, "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC5B4\uC694."), pickFiltered.map((p) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 380, maxWidth: "100%" } }, errorBanner, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginBottom: 22 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: NAVY } }, "\uBCF4\uACE0", /* @__PURE__ */ React.createElement("span", { style: { color: ORANGE } }, "PASS")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: "#8A8578", marginTop: 6 } }, "\uC2DC\uC791\uD558\uAE30 \uC804\uC5D0 \uBCF8\uC778 \uC815\uBCF4\uB97C \uC785\uB825\uD574\uC8FC\uC138\uC694")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("pick"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "pick" ? ORANGE : "#fff", color: mode === "pick" ? "#fff" : NAVY, boxShadow: mode === "pick" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC870\uC9C1\uB3C4\uC5D0\uC11C \uC120\uD0DD"), /* @__PURE__ */ React.createElement("button", { onClick: () => setMode("manual"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: mode === "manual" ? ORANGE : "#fff", color: mode === "manual" ? "#fff" : NAVY, boxShadow: mode === "manual" ? "none" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uC9C1\uC811 \uC785\uB825")), mode === "pick" && /* @__PURE__ */ React.createElement("div", { style: { background: "#fff", borderRadius: 16, padding: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9A9689", marginBottom: 10 } }, "\uC774\uB984, \uD300, \uBCF8\uBD80\uB85C \uAC80\uC0C9\uD574\uC11C \uBCF8\uC778\uC744 \uCC3E\uC73C\uC138\uC694"), /* @__PURE__ */ React.createElement("input", { value: pickSearch, onChange: (e) => setPickSearch(e.target.value), placeholder: "\uC608: \uAE40\uC138\uB9BC, \uAC74\uCD95\uC608\uC0B0\uD300, \uAC74\uCD95\uBCF8\uBD80", style: Object.assign({}, inputStyle, { marginBottom: 12 }) }), /* @__PURE__ */ React.createElement("div", { style: { maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } }, pickFiltered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "24px 0", color: "#B0ABA0", fontSize: 12 } }, "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC5B4\uC694."), pickFiltered.map((p) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: p.id,
@@ -1033,7 +1052,7 @@ const skipBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#ff
 const slotBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#fff", border: "1.5px solid #E4E2DC", fontSize: 12, fontWeight: 700, color: "#8D8A7E", cursor: "pointer" };
 const slotBtnActive = { background: "#EAF4EE", borderColor: GREEN, color: "#2E7048" };
 function App() {
-  const { ready, people, queue, history, savePeople, saveQueue, saveHistory, resetDemoData } = useStorage();
+  const { ready, people, queue, history, initError, savePeople, saveQueue, saveHistory, resetDemoData } = useStorage();
   const [me, setMe] = useState(null);
   const [role, setRole] = useState("reporter");
   const [toast, setToast] = useState(null);
@@ -1136,10 +1155,11 @@ function App() {
   if (!ready) {
     return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8F4EC", color: NAVY, fontSize: 13 } }, "\uBD88\uB7EC\uC624\uB294 \uC911...");
   }
+  const errorBanner = initError ? /* @__PURE__ */ React.createElement("div", { style: { background: "#FDECEA", border: "1px solid #F3C6C0", borderRadius: 12, padding: "12px 14px", margin: "0 0 14px", fontSize: 11.5, color: "#8A2E20", lineHeight: 1.5 } }, /* @__PURE__ */ React.createElement("b", null, "\u26A0\uFE0F \uC11C\uBC84(Supabase) \uC5F0\uACB0 \uBB38\uC81C"), /* @__PURE__ */ React.createElement("br", null), initError, /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("span", { style: { color: "#B0704E" } }, "\uC9C0\uAE08\uC740 \uD654\uBA74\uC774 \uC784\uC2DC \uB370\uC774\uD130\uB85C\uB9CC \uD45C\uC2DC\uB418\uACE0 \uC788\uC5B4\uC694(\uC800\uC7A5/\uB3D9\uAE30\uD654 \uC548 \uB428). \uCF54\uB4DC \uC0C1\uB2E8\uC758 SUPABASE_URL/ANON_KEY \uAC12\uACFC Supabase\uC758 \uD14C\uC774\uBE14\xB7\uC815\uCC45 \uC124\uC815\uC744 \uD655\uC778\uD574\uC8FC\uC138\uC694.")) : null;
   if (!me) {
-    return /* @__PURE__ */ React.createElement(LoginScreen, { people, onLogin: login });
+    return /* @__PURE__ */ React.createElement(LoginScreen, { people, onLogin: login, errorBanner });
   }
-  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", justifyContent: "center", padding: "24px 12px" } }, /* @__PURE__ */ React.createElement(ToastBanner, { toast, onDismiss: () => setToast(null) }), /* @__PURE__ */ React.createElement("div", { style: { width: 400, maxWidth: "100%" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: "#8A8578" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("b", { style: { color: NAVY } }, me.name), " ", me.role, " \xB7 ", me.dept), /* @__PURE__ */ React.createElement("span", { onClick: logout, style: { cursor: "pointer", textDecoration: "underline" } }, "\uB2E4\uB978 \uC0AC\uB78C\uC73C\uB85C \uB85C\uADF8\uC778"), /* @__PURE__ */ React.createElement("span", { onClick: resetDemo, style: { cursor: "pointer", color: ORANGE_DEEP, fontWeight: 700 } }, "[\uCD08\uAE30\uD654]")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setRole("reporter"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: role === "reporter" ? ORANGE : "#fff", color: role === "reporter" ? "#fff" : NAVY, boxShadow: role === "reporter" ? "0 4px 12px rgba(230,106,31,0.28)" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uBCF4\uACE0\uC790 \uBAA8\uB4DC"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#F8F4EC", display: "flex", justifyContent: "center", padding: "24px 12px" } }, /* @__PURE__ */ React.createElement(ToastBanner, { toast, onDismiss: () => setToast(null) }), /* @__PURE__ */ React.createElement("div", { style: { width: 400, maxWidth: "100%" } }, errorBanner, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: "#8A8578" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("b", { style: { color: NAVY } }, me.name), " ", me.role, " \xB7 ", me.dept), /* @__PURE__ */ React.createElement("span", { onClick: logout, style: { cursor: "pointer", textDecoration: "underline" } }, "\uB2E4\uB978 \uC0AC\uB78C\uC73C\uB85C \uB85C\uADF8\uC778"), /* @__PURE__ */ React.createElement("span", { onClick: resetDemo, style: { cursor: "pointer", color: ORANGE_DEEP, fontWeight: 700 } }, "[\uCD08\uAE30\uD654]")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setRole("reporter"), style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: role === "reporter" ? ORANGE : "#fff", color: role === "reporter" ? "#fff" : NAVY, boxShadow: role === "reporter" ? "0 4px 12px rgba(230,106,31,0.28)" : "0 1px 3px rgba(10,38,71,0.12)" } }, "\uBCF4\uACE0\uC790 \uBAA8\uB4DC"), /* @__PURE__ */ React.createElement(
     "button",
     {
       disabled: !me.canApprove,
