@@ -50,9 +50,21 @@
   onerror="showBootError('React 라이브러리(cdnjs.cloudflare.com)를 불러오지 못했어요. 사내망/방화벽에서 cdnjs.cloudflare.com 접속이 막혀있는지 확인해주세요.')"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"
   onerror="showBootError('ReactDOM 라이브러리(cdnjs.cloudflare.com)를 불러오지 못했어요. 사내망/방화벽에서 cdnjs.cloudflare.com 접속이 막혀있는지 확인해주세요.')"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"
+  onerror="showBootError('Supabase 라이브러리(cdn.jsdelivr.net)를 불러오지 못했어요. 사내망/방화벽 설정을 확인해주세요.')"></script>
+
+<script>
+// ============================================================
+// Supabase 연결 정보 — 여기 두 값만 본인 프로젝트 값으로 바꿔주세요
+// (Supabase 대시보드 > Project Settings > API 에서 확인 가능)
+// ============================================================
+window.SUPABASE_URL = "https://ooyqctsjmhktkzpbltgg.supabase.co/rest/v1/";
+window.SUPABASE_ANON_KEY = "sb_publishable_QIznslBSaq8EDW52JdaFBQ_3rmIImfC";
+</script>
 
 <script>
 (function () {
+  // 개인 데이터(로그인 정보, 즐겨찾기)는 기기별로 달라도 되므로 그대로 localStorage 사용
   function prefixed(key, shared) {
     return (shared ? "bogopass_shared_" : "bogopass_local_") + key;
   }
@@ -426,99 +438,193 @@ function todayKey() {
   const idx = (/* @__PURE__ */ new Date()).getDay();
   return DAYS[idx - 1] || null;
 }
+const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+function personToRow(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    role: p.role,
+    dept: p.dept,
+    division: p.division,
+    can_approve: !!p.canApprove,
+    status: p.status,
+    weekly: p.weekly || {},
+    freeze_started_at: p.freezeStartedAt != null ? p.freezeStartedAt : null,
+    is_executive_level: !!p.isExecutiveLevel
+  };
+}
+function rowToPerson(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    role: r.role,
+    dept: r.dept,
+    division: r.division,
+    canApprove: !!r.can_approve,
+    status: r.status,
+    weekly: r.weekly || {},
+    freezeStartedAt: r.freeze_started_at,
+    isExecutiveLevel: !!r.is_executive_level
+  };
+}
+function ticketToRow(t) {
+  return {
+    id: t.id,
+    approver_id: t.approverId,
+    reporter_id: t.reporterId,
+    reporter_name: t.reporterName,
+    content: t.content,
+    est_minutes: t.estMinutes,
+    urgent: !!t.urgent,
+    order_num: t.order,
+    status: t.status,
+    created_at: t.createdAt,
+    called_at: t.calledAt != null ? t.calledAt : null,
+    called_via: t.calledVia != null ? t.calledVia : null,
+    pushed_notice: t.pushedNotice != null ? t.pushedNotice : null,
+    order_swap_notice: t.orderSwapNotice != null ? t.orderSwapNotice : null,
+    started_at: t.startedAt != null ? t.startedAt : null
+  };
+}
+function rowToTicket(r) {
+  return {
+    id: r.id,
+    approverId: r.approver_id,
+    reporterId: r.reporter_id,
+    reporterName: r.reporter_name,
+    content: r.content,
+    estMinutes: r.est_minutes,
+    urgent: !!r.urgent,
+    order: r.order_num,
+    status: r.status,
+    createdAt: r.created_at,
+    calledAt: r.called_at,
+    calledVia: r.called_via,
+    pushedNotice: r.pushed_notice,
+    orderSwapNotice: r.order_swap_notice,
+    startedAt: r.started_at
+  };
+}
+function historyToRow(h) {
+  return { id: h.id, approver_id: h.approverId, reporter_id: h.reporterId, est_minutes: h.estMinutes, actual_minutes: h.actualMinutes, ts: h.ts };
+}
+function rowToHistory(r) {
+  return { id: r.id, approverId: r.approver_id, reporterId: r.reporter_id, estMinutes: r.est_minutes, actualMinutes: r.actual_minutes, ts: r.ts };
+}
 function useStorage() {
   const [ready, setReady] = useState(false);
   const [people, setPeople] = useState([]);
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
-  const pollRef = useRef(null);
-  const loadAll = useCallback(async () => {
-    try {
-      let storedVersion = null;
-      try {
-        const rv = await window.storage.get("seed_version", true);
-        storedVersion = rv ? rv.value : null;
-      } catch (e) {
-        storedVersion = null;
-      }
-      const versionMismatch = storedVersion !== SEED_VERSION;
-      let peopleData;
-      if (versionMismatch) {
-        peopleData = null;
-      } else {
-        try {
-          const r = await window.storage.get("people", true);
-          peopleData = r ? JSON.parse(r.value) : null;
-        } catch (e) {
-          peopleData = null;
-        }
-      }
-      if (!peopleData) {
-        peopleData = SEED_PEOPLE;
-        await window.storage.set("people", JSON.stringify(peopleData), true);
-        await window.storage.set("seed_version", SEED_VERSION, true);
-      }
-      setPeople(peopleData);
-      let queueData;
-      try {
-        const r = await window.storage.get("queue", true);
-        queueData = r ? JSON.parse(r.value) : null;
-      } catch (e) {
-        queueData = null;
-      }
-      if (!queueData || versionMismatch) {
-        queueData = [];
-        await window.storage.set("queue", JSON.stringify(queueData), true);
-      }
-      setQueue(queueData);
-      let historyData;
-      try {
-        const r = await window.storage.get("history", true);
-        historyData = r ? JSON.parse(r.value) : null;
-      } catch (e) {
-        historyData = null;
-      }
-      if (!historyData) {
-        historyData = [];
-        await window.storage.set("history", JSON.stringify(historyData), true);
-      }
-      setHistory(historyData);
-      setReady(true);
-    } catch (e) {
-      console.error("load error", e);
-      setPeople(SEED_PEOPLE);
-      setQueue([]);
-      setHistory([]);
-      setReady(true);
+  const peopleRef = useRef([]);
+  const queueRef = useRef([]);
+  const historyRef = useRef([]);
+  const loadPeople = useCallback(async () => {
+    const { data, error } = await supabase.from("people").select("*");
+    if (!error && data) {
+      const mapped = data.map(rowToPerson);
+      peopleRef.current = mapped;
+      setPeople(mapped);
+    }
+  }, []);
+  const loadQueue = useCallback(async () => {
+    const { data, error } = await supabase.from("queue").select("*");
+    if (!error && data) {
+      const mapped = data.map(rowToTicket);
+      queueRef.current = mapped;
+      setQueue(mapped);
+    }
+  }, []);
+  const loadHistory = useCallback(async () => {
+    const { data, error } = await supabase.from("history").select("*");
+    if (!error && data) {
+      const mapped = data.map(rowToHistory);
+      historyRef.current = mapped;
+      setHistory(mapped);
     }
   }, []);
   useEffect(() => {
-    loadAll();
-    pollRef.current = setInterval(loadAll, 2500);
-    return () => clearInterval(pollRef.current);
-  }, [loadAll]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const { count } = await supabase.from("people").select("*", { count: "exact", head: true });
+        if (!count || count === 0) {
+          await supabase.from("people").upsert(SEED_PEOPLE.map(personToRow));
+        }
+        await Promise.all([loadPeople(), loadQueue(), loadHistory()]);
+        if (!cancelled) setReady(true);
+      } catch (e) {
+        console.error("supabase init error", e);
+        if (!cancelled) {
+          setPeople(SEED_PEOPLE);
+          setReady(true);
+        }
+      }
+    })();
+    const channel = supabase.channel("bogopass-realtime").on("postgres_changes", { event: "*", schema: "public", table: "people" }, loadPeople).on("postgres_changes", { event: "*", schema: "public", table: "queue" }, loadQueue).on("postgres_changes", { event: "*", schema: "public", table: "history" }, loadHistory).subscribe();
+    const fallbackPoll = setInterval(() => {
+      loadPeople();
+      loadQueue();
+      loadHistory();
+    }, 8e3);
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+      clearInterval(fallbackPoll);
+    };
+  }, [loadPeople, loadQueue, loadHistory]);
+  const diffAndSync = useCallback(async (table, prevList, nextList, toRow) => {
+    const prevIds = new Set(prevList.map((x) => x.id));
+    const nextIds = new Set(nextList.map((x) => x.id));
+    const toInsert = nextList.filter((x) => !prevIds.has(x.id));
+    const toUpdate = nextList.filter((x) => {
+      if (!prevIds.has(x.id)) return false;
+      const prevItem = prevList.find((p) => p.id === x.id);
+      return JSON.stringify(prevItem) !== JSON.stringify(x);
+    });
+    const toDelete = prevList.filter((x) => !nextIds.has(x.id));
+    if (toInsert.length) await supabase.from(table).insert(toInsert.map(toRow));
+    for (const item of toUpdate) await supabase.from(table).update(toRow(item)).eq("id", item.id);
+    for (const item of toDelete) await supabase.from(table).delete().eq("id", item.id);
+  }, []);
   const savePeople = useCallback(async (next) => {
+    const prev = peopleRef.current;
+    peopleRef.current = next;
     setPeople(next);
     try {
-      await window.storage.set("people", JSON.stringify(next), true);
+      await diffAndSync("people", prev, next, personToRow);
     } catch (e) {
+      console.error("savePeople failed", e);
     }
-  }, []);
+  }, [diffAndSync]);
   const saveQueue = useCallback(async (next) => {
+    const prev = queueRef.current;
+    queueRef.current = next;
     setQueue(next);
     try {
-      await window.storage.set("queue", JSON.stringify(next), true);
+      await diffAndSync("queue", prev, next, ticketToRow);
     } catch (e) {
+      console.error("saveQueue failed", e);
     }
-  }, []);
+  }, [diffAndSync]);
   const saveHistory = useCallback(async (next) => {
+    const prev = historyRef.current;
+    historyRef.current = next;
     setHistory(next);
     try {
-      await window.storage.set("history", JSON.stringify(next), true);
+      await diffAndSync("history", prev, next, historyToRow);
     } catch (e) {
+      console.error("saveHistory failed", e);
     }
-  }, []);
-  return { ready, people, queue, history, savePeople, saveQueue, saveHistory, reload: loadAll };
+  }, [diffAndSync]);
+  const resetDemoData = useCallback(async () => {
+    await supabase.from("queue").delete().neq("id", "__none__");
+    await supabase.from("history").delete().neq("id", "__none__");
+    await supabase.from("people").delete().neq("id", "__none__");
+    await supabase.from("people").upsert(SEED_PEOPLE.map(personToRow));
+    await Promise.all([loadPeople(), loadQueue(), loadHistory()]);
+  }, [loadPeople, loadQueue, loadHistory]);
+  return { ready, people, queue, history, savePeople, saveQueue, saveHistory, resetDemoData };
 }
 const MIN_HISTORY_SAMPLE = 3;
 const MAX_HISTORY_PER_APPROVER = 30;
@@ -927,7 +1033,7 @@ const skipBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#ff
 const slotBtn = { flex: 1, padding: "10px 0", borderRadius: 10, background: "#fff", border: "1.5px solid #E4E2DC", fontSize: 12, fontWeight: 700, color: "#8D8A7E", cursor: "pointer" };
 const slotBtnActive = { background: "#EAF4EE", borderColor: GREEN, color: "#2E7048" };
 function App() {
-  const { ready, people, queue, history, savePeople, saveQueue, saveHistory } = useStorage();
+  const { ready, people, queue, history, savePeople, saveQueue, saveHistory, resetDemoData } = useStorage();
   const [me, setMe] = useState(null);
   const [role, setRole] = useState("reporter");
   const [toast, setToast] = useState(null);
@@ -1024,10 +1130,8 @@ function App() {
     }
   };
   const resetDemo = async () => {
-    if (!window.confirm("\uB370\uBAA8 \uB370\uC774\uD130\uB97C \uCD08\uAE30 \uC0C1\uD0DC\uB85C \uB418\uB3CC\uB9B4\uAE4C\uC694? (\uB0B4 \uB85C\uADF8\uC778 \uC815\uBCF4\uB294 \uC720\uC9C0\uB429\uB2C8\uB2E4)")) return;
-    localStorage.removeItem("bogopass_shared_people");
-    localStorage.removeItem("bogopass_shared_queue");
-    window.location.reload();
+    if (!window.confirm("\uB370\uBAA8 \uB370\uC774\uD130\uB97C \uC11C\uBC84(Supabase)\uC5D0\uC11C \uCD08\uAE30 \uC0C1\uD0DC\uB85C \uB418\uB3CC\uB9B4\uAE4C\uC694? \uBAA8\uB4E0 \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uC601\uD5A5\uC744 \uC90D\uB2C8\uB2E4. (\uB0B4 \uB85C\uADF8\uC778 \uC815\uBCF4\uB294 \uC720\uC9C0\uB429\uB2C8\uB2E4)")) return;
+    await resetDemoData();
   };
   if (!ready) {
     return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8F4EC", color: NAVY, fontSize: 13 } }, "\uBD88\uB7EC\uC624\uB294 \uC911...");
